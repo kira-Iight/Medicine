@@ -186,6 +186,7 @@
 - **`photo/dendrograms_comparison.png`**: Сравнение дендрограмм.
 - **`photo/optimal_k_analysis.png`**: Анализ оптимального числа кластеров.
 - **`photo/cluster_centroids.png`**: Центроиды кластеров.
+- **`photo/cluster_representative_patients_normalized_time.png`**: Пациенты, максимально близкие к центроидам кластеров.
 
 ### Следующий этап
 Фича-инжиниринг.
