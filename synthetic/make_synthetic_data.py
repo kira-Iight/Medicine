@@ -1,26 +1,53 @@
 """
-Генератор синтетических данных.
-Читает РЕАЛЬНЫЕ CSV из ~/Downloads только для снятия схемы,
-пишет синтетику в ~/Downloads/raw_data_synthetic/.
-Реальные данные НЕ копируются и НЕ сохраняются.
+Генератор синтетических данных на основе SDV (Synthetic Data Vault).
 
-Формат вывода максимально приближен к реальным файлам:
-- все значения в кавычках (как у Excel/1С)
-- разделитель: ';' для справочников и patient_program, ',' для остальных
+Обучает GaussianCopulaSynthesizer на реальных CSV (или их подвыборках
+для очень больших файлов), генерирует анонимизированные данные с той же
+схемой и похожими распределениями. Реальные данные не сохраняются.
+
+Требуется:
+    pip install sdv
+
+Использование:
+    python make_synthetic_data.py
+
+Входные файлы ищутся в родительской папке (../),
+результат кладётся в ../raw_data_synthetic/.
 """
-import csv
 import os
+import sys
+import csv
+import time
+import warnings
+import logging
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
+
+# ---------- тишина в консоли ----------
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning, module="sdv")
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+logging.getLogger("sdv").setLevel(logging.ERROR)
+
+try:
+    from sdv.metadata import SingleTableMetadata
+    from sdv.single_table import GaussianCopulaSynthesizer
+except ImportError:
+    sys.exit(
+        "Не установлен SDV. Выполните:\n"
+        "    pip install sdv\n"
+        "и запустите скрипт снова."
+    )
 
 RNG = np.random.default_rng(42)
+np.random.seed(42)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REAL = os.path.dirname(HERE)                       # ~/Downloads
+REAL = os.path.dirname(HERE)                # ~/Downloads
 OUT  = os.path.join(REAL, "raw_data_synthetic")
 os.makedirs(OUT, exist_ok=True)
 
+# ---------- карта реальных файлов ----------
 FILES = {
     "subjects":        ("Идентификаторы Субъектов 10.04.2025.csv",       ";"),
     "mo":              ("Идентификаторы МО 15.04.2025.csv",              ","),
@@ -30,186 +57,185 @@ FILES = {
     "kzs":             ("Клинически значимые события от 15.04.2025.csv", ","),
 }
 
-# ---------- 1. Снимок схемы реальных файлов ----------
-print("Читаю схемы реальных файлов (только первые 3000 строк)...")
-schema = {}
-for key, (fname, sep) in FILES.items():
+# ---------- сколько строк брать для обучения SDV ----------
+# None = все строки. Для очень больших файлов — случайная подвыборка.
+TRAIN_SAMPLE = {
+    "subjects":        None,
+    "mo":              None,
+    "patient_program": None,
+    "primary":         30_000,   # из 4.9M
+    "therapy":         None,
+    "kzs":             30_000,   # из 1.2M
+}
+
+# ---------- сколько строк генерировать ----------
+GEN_SIZE = {
+    "subjects":        5,
+    "mo":              20,
+    "patient_program": 400,
+    "primary":         40_000,
+    "therapy":         2_000,
+    "kzs":             5_000,
+}
+
+WRITE_KW = dict(quoting=csv.QUOTE_ALL, encoding="utf-8")
+
+
+# =====================================================================
+#                          ВСПОМОГАТЕЛЬНЫЕ
+# =====================================================================
+
+def load_real(key, fname, sep):
+    """Загружает реальный CSV или случайную подвыборку для обучения."""
     path = os.path.join(REAL, fname)
-    try:
-        df = pd.read_csv(path, sep=sep, nrows=3000)
-    except UnicodeDecodeError:
-        df = pd.read_csv(path, sep=sep, nrows=3000, encoding="cp1251")
-    schema[key] = df.columns.tolist()
-    print(f"  {key:16s} → {len(df.columns)} колонок")
+    n = TRAIN_SAMPLE[key]
+    if n is None:
+        df = pd.read_csv(path, sep=sep, low_memory=False)
+    else:
+        chunks, total = [], 0
+        for chunk in pd.read_csv(path, sep=sep, chunksize=100_000,
+                                 low_memory=False):
+            chunks.append(chunk)
+            total += len(chunk)
+            if total >= n * 3:
+                break
+        df = pd.concat(chunks, ignore_index=True)
+        if len(df) > n:
+            df = df.sample(n=n, random_state=42).reset_index(drop=True)
 
-# ---------- 2. Справочники ----------
-N_SUBJ, N_MO, N_PAT, N_PROG = 5, 20, 400, 40
+    # парсим даты/время — без UserWarning
+    for c in df.columns:
+        if "дата" in c.lower() or "время" in c.lower():
+            try:
+                df[c] = pd.to_datetime(df[c], errors="coerce", format="mixed")
+            except (TypeError, ValueError):
+                try:
+                    df[c] = pd.to_datetime(df[c], errors="coerce")
+                except Exception:
+                    pass
+    return df
 
-subjects = pd.DataFrame({
-    "id субъекта":      np.arange(1, N_SUBJ + 1),
-    "название субъекта": [f"Region_{i:02d}" for i in range(1, N_SUBJ + 1)],
-})
-subjects.to_csv(f"{OUT}/Идентификаторы Субъектов.csv", sep=";",
-                index=False, quoting=csv.QUOTE_ALL)
 
-mo = pd.DataFrame({
-    "id МО":       np.arange(1000, 1000 + N_MO),
-    "название МО": [f"MO_{i:03d}" for i in range(1, N_MO + 1)],
-})
-mo.to_csv(f"{OUT}/Идентификаторы МО.csv", sep=",",
-          index=False, quoting=csv.QUOTE_ALL)
+def fit_sample(df, n_rows, table_name):
+    """Обучает GaussianCopulaSynthesizer и генерирует n_rows строк."""
+    t0 = time.time()
+    print(f"  → fit {table_name:16s} ({len(df):>7d} × {df.shape[1]})...",
+          end=" ", flush=True)
+    metadata = SingleTableMetadata()
+    metadata.detect_from_dataframe(df)
+    synth = GaussianCopulaSynthesizer(metadata)
+    synth.fit(df)
+    print(f"{time.time()-t0:.1f} с")
 
-# ---------- 3. Пациент-программа ----------
-patient_program = pd.DataFrame({
-    "название субъекта": RNG.choice(subjects["название субъекта"], N_PAT),
-    "id МО":             RNG.choice(mo["id МО"], N_PAT),
-    "id программы":      RNG.integers(1, N_PROG + 1, N_PAT),
-    "группа наблюдения": RNG.choice(
-        ["experience", "control_1", "undefined"], N_PAT, p=[.09, .03, .88]),
-    "id пациента":       np.arange(100_000, 100_000 + N_PAT),
-})
-patient_program.to_csv(f"{OUT}/МО и Пациенты.csv", sep=";",
-                       index=False, quoting=csv.QUOTE_ALL)
+    t0 = time.time()
+    print(f"  → sample {table_name:16s} ({n_rows:>7d} строк)...",
+          end=" ", flush=True)
+    out = synth.sample(num_rows=n_rows)
+    print(f"{time.time()-t0:.1f} с")
+    return out
 
-# карты для связи id пациента → прочие поля
-pat2prog = dict(zip(patient_program["id пациента"], patient_program["id программы"]))
-pat2mo   = dict(zip(patient_program["id пациента"], patient_program["id МО"]))
-pat2grp  = dict(zip(patient_program["id пациента"], patient_program["группа наблюдения"]))
-subj_name2id = dict(zip(subjects["название субъекта"], subjects["id субъекта"]))
-pat2subj = {p: subj_name2id[s] for p, s in
-            zip(patient_program["id пациента"], patient_program["название субъекта"])}
 
-# ---------- 4. Первичные данные (22 колонки) ----------
-print("\nГенерирую первичные данные...")
-PRIMARY_COLS = [
-    "время измерения", "время сохранения на сервере", "часовой пояс пациента",
-    "САД", "ДАД", "ЧП", "название прибора", "заводской номер",
-    "номер регистрации в организации", "используется ИС ПМП",
-    "id пациента", "код пациента",
-    "id МО, где наблюдается пациент", "название МО, где наблюдается пацие",
-    "id субъекта", "id врача", "дата рождения пациента",
-    "рост", "масса", "основное заболевание", "сопутствующие заболевание",
-    "id программы",
+def weighted_patient_ids(ids, n):
+    """
+    Возвращает n синтетических id пациента так, чтобы распределение
+    «сколько измерений на пациента» было правдоподобно неравномерным.
+    """
+    w = RNG.lognormal(mean=4.5, sigma=1.3, size=len(ids))
+    w = w / w.sum()
+    return RNG.choice(ids, size=n, replace=True, p=w)
+
+
+# =====================================================================
+#                            MAIN
+# =====================================================================
+
+print("Загружаю реальные данные...")
+real = {}
+for key, (fname, sep) in FILES.items():
+    t0 = time.time()
+    real[key] = load_real(key, fname, sep)
+    print(f"  {key:16s}: {len(real[key]):>8d} строк, "
+          f"{real[key].shape[1]} колонок  ({time.time()-t0:.1f} с)")
+
+# ---------- 1. subjects ----------
+print("\n1. Справочник субъектов")
+subjects_syn = fit_sample(real["subjects"], GEN_SIZE["subjects"], "subjects")
+subjects_syn["id субъекта"] = np.arange(1, len(subjects_syn) + 1)
+subjects_syn["название субъекта"] = [f"Region_{i:02d}"
+                                     for i in range(1, len(subjects_syn) + 1)]
+subjects_syn.to_csv(f"{OUT}/Идентификаторы Субъектов.csv",
+                    sep=";", index=False, **WRITE_KW)
+
+# ---------- 2. mo ----------
+print("\n2. Справочник МО")
+mo_syn = fit_sample(real["mo"], GEN_SIZE["mo"], "mo")
+mo_syn["id МО"] = np.arange(1000, 1000 + len(mo_syn))
+mo_syn["название МО"] = [f"MO_{i:03d}" for i in range(1, len(mo_syn) + 1)]
+mo_syn.to_csv(f"{OUT}/Идентификаторы МО.csv",
+              sep=",", index=False, **WRITE_KW)
+
+# ---------- 3. patient_program ----------
+print("\n3. Пациент-программа")
+pp_syn = fit_sample(real["patient_program"],
+                    GEN_SIZE["patient_program"], "patient_program")
+
+# — вымышленные id —
+pp_syn["id пациента"] = np.arange(100_000, 100_000 + len(pp_syn))
+pp_syn["id МО"]       = RNG.choice(mo_syn["id МО"].values, len(pp_syn))
+pp_syn["название субъекта"] = RNG.choice(
+    subjects_syn["название субъекта"].values, len(pp_syn))
+pp_syn["id программы"] = RNG.integers(1, 41, len(pp_syn))
+pp_syn["группа наблюдения"] = RNG.choice(
+    ["experience", "control_1", "undefined"], len(pp_syn), p=[.09, .03, .88])
+
+pp_syn.to_csv(f"{OUT}/МО и Пациенты.csv",
+              sep=";", index=False, **WRITE_KW)
+
+# карты для ремапа FK
+syn_pat_ids    = pp_syn["id пациента"].values
+pat2prog       = dict(zip(pp_syn["id пациента"], pp_syn["id программы"]))
+pat2mo         = dict(zip(pp_syn["id пациента"], pp_syn["id МО"]))
+pat2subj_name  = dict(zip(pp_syn["id пациента"], pp_syn["название субъекта"]))
+subj_name2id   = dict(zip(subjects_syn["название субъекта"],
+                          subjects_syn["id субъекта"]))
+
+# ---------- 4. primary ----------
+print("\n4. Первичные данные")
+primary_syn = fit_sample(real["primary"], GEN_SIZE["primary"], "primary")
+
+# ремап FK — с реалистичным распределением «много измерений на пациента»
+new_pat = weighted_patient_ids(syn_pat_ids, len(primary_syn))
+primary_syn["id пациента"]  = new_pat
+primary_syn["код пациента"] = new_pat
+primary_syn["id программы"] = [pat2prog[p] for p in new_pat]
+primary_syn["id МО, где наблюдается пациент"] = [pat2mo[p] for p in new_pat]
+primary_syn["название МО, где наблюдается пацие"] = [
+    f"MO_{pat2mo[p]-999:03d}" for p in new_pat
 ]
-assert PRIMARY_COLS == schema["primary"], "Порядок/имена колонок не совпадают!"
-
-start = datetime(2023, 12, 22)
-rows = []
-for pid in patient_program["id пациента"]:
-    grp = pat2grp[pid]
-    n = min(int(RNG.gamma(2.0, 50)) + 5, 400)
-    age    = float(np.clip(RNG.normal(63, 12), 18, 100))
-    height = float(np.clip(RNG.normal(166, 9), 140, 210))
-    weight = float(np.clip(RNG.normal(82, 16), 40, 150))
-    tz     = int(RNG.choice([3, 4, 5, 7], p=[.45, .02, .31, .22]))
-    if grp == "experience":   base_sad, base_dad = 130, 81
-    elif grp == "control_1":  base_sad, base_dad = 129, 81
-    else:                     base_sad, base_dad = 127, 80
-    dob = (datetime(2024, 1, 1) - timedelta(days=int(age * 365.25))).strftime("%Y-%m-%d")
-    device_id  = int(RNG.integers(1, 30))
-    device_sn  = f"SN{RNG.integers(100000, 999999)}"
-    device_reg = f"REG{RNG.integers(1000, 9999)}"
-    doctor_id  = int(RNG.integers(1, 500))
-
-    dates = sorted(start + timedelta(days=int(x))
-                   for x in RNG.uniform(0, 365, n))
-    for d in dates:
-        rows.append({
-            "время измерения": d.strftime("%Y-%m-%d %H:%M:%S"),
-            "время сохранения на сервере":
-                (d + timedelta(seconds=int(RNG.exponential(5)))).strftime("%Y-%m-%d %H:%M:%S"),
-            "часовой пояс пациента": tz,
-            "САД": int(np.clip(RNG.normal(base_sad, 14), 70, 220)),
-            "ДАД": int(np.clip(RNG.normal(base_dad, 10), 40, 130)),
-            "ЧП":  int(np.clip(RNG.normal(72, 11), 40, 180)),
-            "название прибора": f"Device_{device_id:02d}",
-            "заводской номер":  device_sn,
-            "номер регистрации в организации": device_reg,
-            "используется ИС ПМП": RNG.choice(["да", "нет"], p=[.7, .3]),
-            "id пациента":  pid,
-            "код пациента": pid,
-            "id МО, где наблюдается пациент": pat2mo[pid],
-            "название МО, где наблюдается пацие": f"MO_{pat2mo[pid]-999:03d}",
-            "id субъекта": pat2subj[pid],
-            "id врача":    doctor_id,
-            "дата рождения пациента": dob,
-            "рост":  height if RNG.random() > 0.44 else None,
-            "масса": weight if RNG.random() > 0.44 else None,
-            "основное заболевание":      "I10" if RNG.random() > 0.4 else None,
-            "сопутствующие заболевание": "E11" if RNG.random() > 0.6 else None,
-            "id программы": pat2prog[pid],
-        })
-primary_df = pd.DataFrame(rows, columns=PRIMARY_COLS)
-primary_df.to_csv(f"{OUT}/Первичные данные.csv", sep=",",
-                  index=False, quoting=csv.QUOTE_ALL)
-
-# ---------- 5. Терапия (12 колонок) ----------
-print("Генерирую терапию...")
-THERAPY_COLS = [
-    "id программы", "дата начала программы", "дата назначения",
-    "назначен очно (да/нет)", "принимаемая терапия (да/нет)", "МНН",
-    "время приема", "регулярность", "способ применения",
-    "продолж. приема на момент выгрузки", "дата начала приема",
-    "дата окончания приема",
+primary_syn["id субъекта"] = [
+    subj_name2id.get(pat2subj_name[p]) for p in new_pat
 ]
-assert THERAPY_COLS == schema["therapy"], "Порядок/имена колонок не совпадают!"
+primary_syn.to_csv(f"{OUT}/Первичные данные.csv",
+                   sep=",", index=False, **WRITE_KW)
 
-mnn_pool = ["бисопролол", "индапамид", "амлодипин", "лозартан",
-            "периндоприл", "эналаприл", "аторвастатин", "лизиноприл",
-            "моксонидин", "валсартан"]
-N_TH = 2000
-th_rows = []
-for _ in range(N_TH):
-    pid = int(RNG.choice(patient_program["id пациента"]))
-    d_start = start + timedelta(days=int(RNG.uniform(0, 365)))
-    d_end   = d_start + timedelta(days=int(RNG.uniform(30, 400)))
-    th_rows.append({
-        "id программы": pat2prog[pid],
-        "дата начала программы": d_start.strftime("%Y-%m-%d"),
-        "дата назначения":       d_start.strftime("%Y-%m-%d"),
-        "назначен очно (да/нет)": RNG.choice(["да", "нет"], p=[.6, .4]),
-        "принимаемая терапия (да/нет)": RNG.choice(["да", "нет"], p=[.8, .2]),
-        "МНН": RNG.choice(mnn_pool),
-        "время приема": RNG.choice(["утро", "вечер", "утро/вечер"], p=[.4, .3, .3]),
-        "регулярность": RNG.choice(["ежедневно", "по требованию"], p=[.85, .15]),
-        "способ применения": RNG.choice(["перорально", "подкожно"], p=[.95, .05]),
-        "продолж. приема на момент выгрузки":
-            int((d_end - d_start).days) if RNG.random() > .3 else None,
-        "дата начала приема":    d_start.strftime("%Y-%m-%d"),
-        "дата окончания приема": d_end.strftime("%Y-%m-%d"),
-    })
-therapy_df = pd.DataFrame(th_rows, columns=THERAPY_COLS)
-therapy_df.to_csv(f"{OUT}/Медикаментозная терапия.csv", sep=",",
-                  index=False, quoting=csv.QUOTE_ALL)
+# ---------- 5. therapy ----------
+print("\n5. Терапия")
+therapy_syn = fit_sample(real["therapy"], GEN_SIZE["therapy"], "therapy")
+therapy_syn["id программы"] = RNG.choice(
+    list(pat2prog.values()), len(therapy_syn))
+therapy_syn.to_csv(f"{OUT}/Медикаментозная терапия.csv",
+                   sep=",", index=False, **WRITE_KW)
 
-# ---------- 6. КЗС (4 колонки) ----------
-print("Генерирую КЗС...")
-KZS_COLS = ["id программы", "id пациента",
-            "дата, время формирования КЗС", "код КЗС"]
-assert KZS_COLS == schema["kzs"], "Порядок/имена колонок не совпадают!"
+# ---------- 6. kzs ----------
+print("\n6. Клинически значимые события")
+kzs_syn = fit_sample(real["kzs"], GEN_SIZE["kzs"], "kzs")
+new_pat_kzs = weighted_patient_ids(syn_pat_ids, len(kzs_syn))
+kzs_syn["id пациента"]  = new_pat_kzs
+kzs_syn["id программы"] = [pat2prog[p] for p in new_pat_kzs]
+kzs_syn.to_csv(f"{OUT}/Клинически значимые события.csv",
+               sep=",", index=False, **WRITE_KW)
 
-kzs_codes = [33921, 33923, 33911, 33430, 33922,
-             33913, 33431, 33901, 33924, 77710]
-kzs_p = [.30, .15, .13, .10, .08, .07, .05, .05, .04, .03]   # ровно 1.0
-assert abs(sum(kzs_p) - 1.0) < 1e-9, f"Сумма вероятностей = {sum(kzs_p)}"
-
-N_KZS = 5000
-kzs_rows = []
-for _ in range(N_KZS):
-    pid = int(RNG.choice(patient_program["id пациента"]))
-    d = start + timedelta(days=float(RNG.uniform(0, 365)),
-                          hours=float(RNG.uniform(0, 24)))
-    kzs_rows.append({
-        "id программы": pat2prog[pid],
-        "id пациента":  pid,
-        "дата, время формирования КЗС": d.strftime("%Y-%m-%d %H:%M:%S"),
-        "код КЗС": int(RNG.choice(kzs_codes, p=kzs_p)),
-    })
-kzs_df = pd.DataFrame(kzs_rows, columns=KZS_COLS)
-kzs_df.to_csv(f"{OUT}/Клинически значимые события.csv", sep=",",
-              index=False, quoting=csv.QUOTE_ALL)
-
-# ---------- Итог ----------
+# ---------- итог ----------
 print("\nГотово. Файлы в:", OUT)
 for f in sorted(os.listdir(OUT)):
     n = sum(1 for _ in open(os.path.join(OUT, f), encoding="utf-8")) - 1
