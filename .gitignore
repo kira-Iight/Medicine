@@ -1,0 +1,9 @@
+2025_04_15/
+cache_v2/
+cache_v2_debug/
+results_v2_debug/
+__pycache__/
+# Разборы отдельных пациентов и внутренние документы — не для публичного репозитория
+results_v2/interpret/local_cases_*.png
+results_v2/*.docx
+paper_notes/

@@ -1,0 +1,14 @@
+# Окружение, на котором посчитаны ноутбуки clusterbp_v2*.ipynb (Python 3.11, только CPU)
+numpy==2.4.5
+pandas==2.3.3
+pyarrow==26.0.0
+scipy==1.17.1
+scikit-learn==1.8.0
+xgboost==3.2.0
+torch==2.12.0
+numba==0.65.1
+matplotlib==3.10.9
+jupyter_client==8.8.0
+ipykernel==7.2.0
+nbformat==5.11.1
+nbconvert==7.17.2
