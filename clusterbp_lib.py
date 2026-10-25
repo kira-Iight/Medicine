@@ -1,7 +1,11 @@
 """Общий код ClusterBP v2 (clusterbp_v2*.ipynb): цели, признаки, фенотипы GDTW, модели, метрики.
 
-Режим отладки: переменная окружения CLUSTERBP_DEBUG=1. В нём модели, предсказания и таблицы пишутся
-в cache_v2_debug/ и results_v2_debug/, чтобы не затереть результаты полного прогона.
+Переменные окружения:
+- CLUSTERBP_DEBUG=1 — быстрый прогон на 1 500 пациентах; модели, предсказания и таблицы пишутся
+  в cache_v2_debug/ и results_v2_debug/, чтобы не затереть результаты полного прогона;
+- CLUSTERBP_RAW_DIR — папка с выгрузкой (по умолчанию 2025_04_15);
+- CLUSTERBP_TAG — метка другого набора данных (например, synthetic): все промежуточные данные и результаты
+  пишутся в отдельные папки cache_v2_<метка>/ и results_v2_<метка>/.
 """
 import os
 
@@ -16,10 +20,12 @@ from sklearn.metrics import average_precision_score, f1_score
 from xgboost import XGBClassifier
 
 DEBUG = os.environ.get('CLUSTERBP_DEBUG') == '1'
-RAW_DIR = '2025_04_15'                       # исходная выгрузка оператора (не в git)
-DATA_DIR = 'cache_v2'                        # очищенные данные и окна (общие для всех режимов)
-CACHE_DIR = 'cache_v2_debug' if DEBUG else 'cache_v2'      # модели и предсказания
-RESULTS_DIR = 'results_v2_debug' if DEBUG else 'results_v2'
+RAW_DIR = os.environ.get('CLUSTERBP_RAW_DIR', '2025_04_15')   # исходная выгрузка оператора (не в git)
+_TAG = os.environ.get('CLUSTERBP_TAG', '')
+_SUFFIX = f'_{_TAG}' if _TAG else ''
+DATA_DIR = 'cache_v2' + _SUFFIX                                # очищенные данные и окна
+CACHE_DIR = DATA_DIR + ('_debug' if DEBUG else '')             # модели и предсказания
+RESULTS_DIR = 'results_v2' + _SUFFIX + ('_debug' if DEBUG else '')
 MODELS_DIR = os.path.join(CACHE_DIR, 'models')
 for _d in [DATA_DIR, CACHE_DIR, RESULTS_DIR, MODELS_DIR]:
     os.makedirs(_d, exist_ok=True)
@@ -96,6 +102,15 @@ def fold_masks(win, k):
     val_pids = rng.choice(train_pids, int(len(train_pids) * INNER_VAL_FRAC), replace=False)
     va = ~te & np.isin(patients, val_pids)
     return ~te & ~va, va, te
+
+
+def load_regions():
+    """Регион (субъект РФ) каждого пациента из справочника «МО и Пациенты»."""
+    grp = pd.read_csv(os.path.join(RAW_DIR, 'МО и Пациенты 10.04.2025.csv'), sep=';')
+    pid = pd.to_numeric(grp['id пациента'].astype(str).str.replace(r'\s', '', regex=True), errors='coerce')
+    ok = pid.notna().values
+    s = pd.Series(grp['название субъекта'].values[ok], index=pid[ok].astype('int64').values)
+    return s[~s.index.duplicated()]
 
 
 # ---------------------------------------------------------------- фенотипы GDTW
@@ -263,8 +278,86 @@ def gru_logits(model, X, L, mu, sd, bs=8192):
     return np.concatenate(out)
 
 
+class TCN(nn.Module):
+    """Свёрточная сеть с причинными расширенными свёртками (dilation 1, 2, 4, 8) по последним измерениям окна."""
+
+    def __init__(self, n_in, channels=64, kernel=3, dilations=(1, 2, 4, 8), dropout=0.2):
+        super().__init__()
+        self.inp = nn.Conv1d(n_in, channels, 1)
+        self.blocks = nn.ModuleList()
+        self.pads = list((kernel - 1) * d for d in dilations)
+        for d in dilations:
+            self.blocks.append(nn.Sequential(nn.Conv1d(channels, channels, kernel, dilation=d), nn.ReLU(),
+                                             nn.Dropout(dropout)))
+        self.out = nn.Linear(2 * channels, 1)
+
+    def forward(self, x, mask):
+        h = self.inp(x.transpose(1, 2))
+        for pad, block in zip(self.pads, self.blocks):
+            h = h + block(nn.functional.pad(h, (pad, 0)))
+        h = h.transpose(1, 2)                                     # (B, T, C)
+        m = mask.unsqueeze(-1).float()
+        mean = (h * m).sum(1) / m.sum(1).clamp(min=1)
+        return self.out(torch.cat([mean, h[:, -1]], dim=1)).squeeze(-1)
+
+
+class SeqTransformer(nn.Module):
+    """Небольшой Transformer-энкодер (2 слоя, 4 головы) с маскированием паддинга и усреднением по измерениям."""
+
+    def __init__(self, n_in, d_model=64, heads=4, layers=2, dropout=0.1):
+        super().__init__()
+        self.inp = nn.Linear(n_in, d_model)
+        self.pos = nn.Parameter(torch.zeros(1, MAX_POINTS, d_model))
+        layer = nn.TransformerEncoderLayer(d_model, heads, dim_feedforward=2 * d_model, dropout=dropout,
+                                           batch_first=True)
+        self.enc = nn.TransformerEncoder(layer, layers, enable_nested_tensor=False)
+        self.out = nn.Linear(d_model, 1)
+
+    def forward(self, x, mask):
+        h = self.enc(self.inp(x) + self.pos, src_key_padding_mask=~mask)
+        m = mask.unsqueeze(-1).float()
+        return self.out((h * m).sum(1) / m.sum(1).clamp(min=1)).squeeze(-1)
+
+
+class TimeAwareGRU(nn.Module):
+    """GRU с затуханием скрытого состояния по времени между измерениями (идея GRU-D / DATA-GRU)
+    и аддитивным вниманием, как в GRUAttn. Канал 4 входа — log часов от предыдущего измерения."""
+
+    def __init__(self, n_in, hidden=64, dt_channel=4):
+        super().__init__()
+        self.cell = nn.GRUCell(n_in, hidden)
+        self.decay = nn.Linear(1, hidden)
+        self.dt_channel = dt_channel
+        self.att = nn.Sequential(nn.Linear(hidden, 64), nn.Tanh(), nn.Linear(64, 1))
+        self.drop = nn.Dropout(0.3)
+        self.out = nn.Linear(hidden, 1)
+
+    def forward(self, x, mask):
+        B, T, _ = x.shape
+        h = x.new_zeros(B, self.cell.hidden_size)
+        outs = []
+        for t in range(T):
+            gamma = torch.exp(-nn.functional.softplus(self.decay(x[:, t, self.dt_channel:self.dt_channel + 1])))
+            h_new = self.cell(x[:, t], h * gamma)
+            h = torch.where(mask[:, t:t + 1], h_new, h)
+            outs.append(h)
+        hs = torch.stack(outs, 1)
+        a = self.att(hs).squeeze(-1).masked_fill(~mask, -1e9)
+        w = torch.softmax(a, dim=1).unsqueeze(-1)
+        return self.out(self.drop((w * hs).sum(1))).squeeze(-1)
+
+
+SEQ_MODELS = {'GRU': GRUAttn, 'TimeAwareGRU': TimeAwareGRU, 'TCN': TCN, 'Transformer': SeqTransformer}
+
+
 def train_gru(Xtr, Ltr, ytr, Xva, Lva, yva, seed, max_epochs=25, patience=3, bs=512):
-    """Обучение GRU: отрицательные окна прорежены до NEG_PER_POS:1, ранняя остановка по AUPRC на валидации.
+    """Обучение GRU (см. train_seq_model)."""
+    return train_seq_model(GRUAttn, Xtr, Ltr, ytr, Xva, Lva, yva, seed, max_epochs, patience, bs)
+
+
+def train_seq_model(model_cls, Xtr, Ltr, ytr, Xva, Lva, yva, seed, max_epochs=25, patience=3, bs=512):
+    """Обучение модели последовательностей: отрицательные окна прорежены до NEG_PER_POS:1,
+    ранняя остановка по AUPRC на валидации.
 
     Возвращает модель, параметры стандартизации, поправку к logit на прореживание (log доли оставленных
     отрицательных) и AUPRC на валидации по эпохам.
@@ -282,7 +375,7 @@ def train_gru(Xtr, Ltr, ytr, Xva, Lva, yva, seed, max_epochs=25, patience=3, bs=
     Z = np.where(m[..., None], (X - mu) / sd, 0).astype(np.float32)
     Zt, Mt, yt = torch.from_numpy(Z), torch.from_numpy(m), torch.from_numpy(y)
 
-    model = GRUAttn(X.shape[2])
+    model = model_cls(X.shape[2])
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
     loss_fn = nn.BCEWithLogitsLoss()
     best, best_state, bad, log = -1.0, None, 0, []

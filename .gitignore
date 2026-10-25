@@ -7,3 +7,8 @@ __pycache__/
 results_v2/interpret/local_cases_*.png
 results_v2/*.docx
 paper_notes/
+# Синтетика: генерируется скриптом synthetic/make_rule_based_data.py
+synthetic/rule_based/
+synthetic/run/
+cache_v2_synthetic*/
+results_v2_synthetic*/
