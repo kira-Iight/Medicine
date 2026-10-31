@@ -424,3 +424,16 @@ Cross-validation at the real event rate (A — 4.7% of windows, B — 13.1%):
 Temporal validation (test from October 2024): ClusterBP v2 reaches AUPRC 0.43 for A and 0.58 for B; 0.34 and 0.53 on new patients. On regions not seen in training, AUPRC is 0.45 for A and 0.68 for B, the same as in patient-level CV. Predicted probabilities are well calibrated (ECE ≤ 0.002). The model mostly anticipates repeated events: it detects 62% of all type A episodes but only 10% of a patient's first episode.
 
 All tables and figures are in `results_v2/`.
+
+### Revision analyses
+
+Four further notebooks address reviewer questions. They reuse the windows from `clusterbp_v2.ipynb` (run it first); shared code is in `clusterbp_extra.py`. Folds match the main notebook (taken from `oof_predictions.parquet` when present). The model throughout is XGB_full, which matches ClusterBP v2 in quality and is cheap to retrain. All 95% CIs come from a paired patient-level bootstrap (`CLUSTERBP_N_BOOT`, default 1000).
+
+| Notebook | Content | Outputs |
+|:---|:---|:---|
+| `clusterbp_v2_leakage.ipynb` | Leakage audit. Five protocol errors are tested as switches on the same data: random window split, phenotypes fitted on all patients, no gap, threshold tuned on test, balanced test. Each error is shown alone, all together, and as its contribution on top of the others (full factorial design). Also shows how the model's lead over the max-SBP rule changes. | `results_v2/leakage/` |
+| `clusterbp_v2_first_events.ipynb` | Separate setup for windows with no prior event of the type. Rules, XGB_full, and models trained only on such windows (± long history) are compared at the subset's own event rate. Reports sensitivity at fixed specificity and detection of each patient's first episode. | `results_v2/first_events/` |
+| `clusterbp_v2_features.ipynb` | Therapy features (patients linked via program id; drug classes from INN; only prescriptions dated strictly before the cutoff day). Includes coverage and reverse-causality checks. Also 30/60/90-day history features (day-to-day SBP variability, event counts). Reports the gain over XGB_full on all windows and on first-event windows. | `results_v2/features/` |
+| `clusterbp_v2_shift_subgroups.ipynb` | Which B codes drive the monthly jumps in the B rate. Compares a static model, monthly recalibration (intercept only, or intercept and slope) and monthly retraining on the temporal split. Shows quality by age, BMI, programme arm, measurement intensity, time in programme, phenotype and region. Sex is not in the export. | `results_v2/shift_subgroups/` |
+
+The notebooks were checked end to end on the rule-based synthetic data (`CLUSTERBP_RAW_DIR=synthetic/rule_based CLUSTERBP_TAG=synthetic`). Run time on the full export is about 1–1.5 h for the leakage audit and about 15–30 min for each of the others.
