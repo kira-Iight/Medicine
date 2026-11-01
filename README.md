@@ -376,9 +376,9 @@ python 6_gdtw_clustering.py
 
 The second version of the ClusterBP pipeline keeps the architecture (GDTW phenotypes + GRU and XGBoost modules + fusion of their predictions) and extends the task definition, features and evaluation:
 
-* **Two event types** instead of one combined target: **A** — acute BP rise (codes 33012, 33901, 33902) and **B** — BP above the patient's target, a sign of ineffective therapy (33601, 33801, 33802, 33810, 33911). The first-version target is kept as **OLD** for comparison. According to the operator's code dictionary, clinically significant events are alerts of the monitoring system (BP and HR "zones", loss of target BP control).
+* **Two event types** instead of one combined target: **A** — acute BP rise (codes 33012, 33901) and **B** — BP above the patient's target, a sign of ineffective therapy (33601, 33801, 33802, 33911). Code 33902 (heart-rate red zone) is not a BP event, and 33810 ("signs of reaching target BP") is the opposite of B and appears only in some months, causing jumps in the B rate; both are kept only as sensitivity checks (`A_with33902`, `B_with33810`), together with `B_no33601` (33601 exists only from November 2024) and `B_gap0`. The first-version target is kept as **OLD** for comparison. According to the operator's code dictionary, clinically significant events are alerts of the monitoring system (BP and HR "zones", loss of target BP control).
 * **Causal setup:** history windows and events share one timeline (server time); a gap of 1 day (A) and 7 days (B) separates the history window from the prediction horizon, so the target is not computed from the input measurements.
-* **Extended static module** (XGB_full, 52 features): peaks and variability of BP (ARV), slopes, shares of readings above 140/160/180 mm Hg, DBP, HR, measurement regime, history of events before the prediction time.
+* **Extended static module** (XGB_full): peaks and variability of BP (ARV), slopes, shares of readings above 140/160/180 mm Hg, DBP, HR, measurement regime, history of events before the prediction time, and long-history features over the past 30/60/90 days (day-to-day SBP variability, event counts; `LH_COLS` in `clusterbp_lib.py`).
 * **Strict evaluation:** patient-level 5-fold CV; early stopping, thresholds and fusion weights tuned on an inner validation split; phenotypes fitted on training patients only and assigned from the past 30 days of each window; metrics at the real event rate; patient-level bootstrap 95% CIs; comparison with clinical rules.
 * **Temporal validation:** training before 2024-10-01, testing on October 2024 – January 2025, separately on new patients.
 * **Mixture-of-experts comparison:** learnable phenotype gate, MoE gate on patient features (Hurley et al., 2023), residual experts (Lee & Hauskrecht, 2022).
@@ -408,11 +408,11 @@ export CLUSTERBP_RAW_DIR=synthetic/rule_based CLUSTERBP_TAG=synthetic
 jupyter nbconvert --to notebook --execute --output-dir synthetic/run clusterbp_v2.ipynb
 ```
 
-The generator simulates a blood pressure series for each patient (baseline, trend, day-to-day variation, surge episodes) and assigns clinically significant events by zone rules (e.g. a "red zone" at SBP ≥ 180 mm Hg). With `CLUSTERBP_TAG=synthetic` all intermediate files and results go to `cache_v2_synthetic/` and `results_v2_synthetic/`. Metrics on synthetic data have no clinical meaning; the data only show that the code runs end to end. The SDV-based files in `raw_data/` keep the schema but not per-patient time series, so they are suitable for EDA but not for this pipeline.
+The generator simulates a blood pressure series for each patient (baseline, trend, day-to-day variation, surge episodes) and assigns clinically significant events by zone rules (e.g. a "red zone" at SBP ≥ 180 mm Hg). With `CLUSTERBP_TAG=synthetic` all intermediate files and results go to `cache_v2_synthetic/` and `results_v2_synthetic/`. Metrics on synthetic data have no clinical meaning; the data only show that the code runs end to end.
 
 ### Main results
 
-Cross-validation at the real event rate (A — 4.7% of windows, B — 13.1%):
+Cross-validation at the real event rate (first v2 run, with the earlier target definitions and without long-history features; to be updated after the rerun) (A — 4.7% of windows, B — 13.1%):
 
 | Model | A: AUROC | A: AUPRC | B: AUROC | B: AUPRC |
 |:---|:---:|:---:|:---:|:---:|
@@ -427,13 +427,29 @@ All tables and figures are in `results_v2/`.
 
 ### Revision analyses
 
-Four further notebooks address reviewer questions. They reuse the windows from `clusterbp_v2.ipynb` (run it first); shared code is in `clusterbp_extra.py`. Folds match the main notebook (taken from `oof_predictions.parquet` when present). The model throughout is XGB_full, which matches ClusterBP v2 in quality and is cheap to retrain. All 95% CIs come from a paired patient-level bootstrap (`CLUSTERBP_N_BOOT`, default 1000).
+Four further notebooks address reviewer questions. They reuse the windows from `clusterbp_v2.ipynb` (run it first); shared code is in `clusterbp_extra.py`. Folds match the main notebook. The model throughout is XGB_full, which matches ClusterBP v2 in quality and is cheap to retrain. All 95% CIs come from a paired patient-level bootstrap (`CLUSTERBP_N_BOOT`, default 1000).
 
 | Notebook | Content | Outputs |
 |:---|:---|:---|
-| `clusterbp_v2_leakage.ipynb` | Leakage audit. Five protocol errors are tested as switches on the same data: random window split, phenotypes fitted on all patients, no gap, threshold tuned on test, balanced test. Each error is shown alone, all together, and as its contribution on top of the others (full factorial design). Also shows how the model's lead over the max-SBP rule changes. | `results_v2/leakage/` |
-| `clusterbp_v2_first_events.ipynb` | Separate setup for windows with no prior event of the type. Rules, XGB_full, and models trained only on such windows (± long history) are compared at the subset's own event rate. Reports sensitivity at fixed specificity and detection of each patient's first episode. | `results_v2/first_events/` |
-| `clusterbp_v2_features.ipynb` | Therapy features (patients linked via program id; drug classes from INN; only prescriptions dated strictly before the cutoff day). Includes coverage and reverse-causality checks. Also 30/60/90-day history features (day-to-day SBP variability, event counts). Reports the gain over XGB_full on all windows and on first-event windows. | `results_v2/features/` |
-| `clusterbp_v2_shift_subgroups.ipynb` | Which B codes drive the monthly jumps in the B rate. Compares a static model, monthly recalibration (intercept only, or intercept and slope) and monthly retraining on the temporal split. Shows quality by age, BMI, programme arm, measurement intensity, time in programme, phenotype and region. Sex is not in the export. | `results_v2/shift_subgroups/` |
+| `clusterbp_v2_leakage.ipynb` | Leakage audit. Six protocol errors are tested as switches on the same data: random window split, phenotypes fitted on all patients, phenotype from the full patient history (as in the first version), no gap, threshold tuned on test, balanced test. Each error is shown alone, all together, and as its contribution on top of the others; point metrics for the full factorial design. Also shows how the model's lead over the max-SBP rule changes. Figure: `leakage_single_en.png`. | `results_v2/leakage/` |
+| `clusterbp_v2_first_events.ipynb` | Windows with no prior event of the type. Rules, XGB_full, and models trained only on such windows (with and without long history) at the subset's own event rate. Sensitivity at fixed specificity and detection of each patient's first event (the very first event of the type, one per patient — same definition as in `clusterbp_v2_additional.ipynb`). The `порог` column states which threshold was used. | `results_v2/first_events/` |
+| `clusterbp_v2_features.ipynb` | What long history adds (XGB_full vs XGB_full without it) and therapy features (patients linked via programme id; drug classes from INN; only prescriptions dated strictly before the cutoff day), with coverage and reverse-causality checks. Therapy adds nothing and is not used in the models. | `results_v2/features/` |
+| `clusterbp_v2_shift_subgroups.ipynb` | B codes by month (including the excluded 33810). Static model vs monthly recalibration and retraining on the temporal split. Quality by age, BMI, programme arm, measurement intensity, time in programme, phenotype and region (`subgroups_regions_en.png`). Sex is not in the export. | `results_v2/shift_subgroups/` |
 
-The notebooks were checked end to end on the rule-based synthetic data (`CLUSTERBP_RAW_DIR=synthetic/rule_based CLUSTERBP_TAG=synthetic`). Run time on the full export is about 1–1.5 h for the leakage audit and about 15–30 min for each of the others.
+Caches are tagged with a hash of the targets and features (`*.meta.json`, `features_therapy_<hash>.parquet`): after changing targets or features, `clusterbp_v2.ipynb` rebuilds windows and reruns cross-validation automatically, and the other notebooks refuse stale predictions. GDTW phenotype assignments (`pheno_assign_*.npz`, `models/templates_*.npy`) do not depend on targets and are reused.
+
+Run order: `clusterbp_v2.ipynb` → `_temporal`, `_moe`, `_sequence_models`, `_regions`, `_additional`, `_interpret` → `_leakage`, `_first_events`, `_features`, `_shift_subgroups`.
+
+### Public data: VitalDB
+
+`datasets/vitaldb.py` converts the open VitalDB intraoperative dataset (no registration) into the pipeline's format: `measurements.parquet` (per-minute median arterial SBP, DBP, HR), `patients.parquet` and `events.parquet` (90001 — minute with mean arterial pressure < 65 mm Hg, 90002 — minute with SBP ≥ 160 mm Hg). With `CLUSTERBP_PRESET=vitaldb` all durations are read in minutes (14-min history, 3-min stride, 5-min gap, 5-min horizon). Events are defined by a threshold on the input signal, as in the operator's data, so the gap and the leakage audit apply directly. The purpose is to test the method and protocol on data any reviewer can download, not the clinical conclusions.
+
+```bash
+pip install vitaldb
+python datasets/vitaldb.py --cases 600                       # writes cache_v2_vitaldb/
+export CLUSTERBP_PRESET=vitaldb CLUSTERBP_TAG=vitaldb
+jupyter nbconvert --to notebook --execute clusterbp_v2.ipynb
+jupyter nbconvert --to notebook --execute clusterbp_v2_leakage.ipynb
+```
+
+The other notebooks use the operator's reference files (regions, therapy) and are not run on VitalDB.

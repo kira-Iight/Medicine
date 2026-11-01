@@ -7,6 +7,8 @@
 - CLUSTERBP_TAG — метка другого набора данных (например, synthetic): все промежуточные данные и результаты
   пишутся в отдельные папки cache_v2_<метка>/ и results_v2_<метка>/.
 """
+import hashlib
+import json
 import os
 
 import numpy as np
@@ -31,11 +33,15 @@ for _d in [DATA_DIR, CACHE_DIR, RESULTS_DIR, MODELS_DIR]:
     os.makedirs(_d, exist_ok=True)
 
 SEED = 42
+# Набор данных и шкала времени. 'pmp' — выгрузка оператора (время в днях). 'vitaldb' — открытый набор VitalDB,
+# подготовленный datasets/vitaldb.py: время в минутах, поэтому все длительности ниже читаются в минутах
+# (окно истории 14 мин, шаг 3 мин и т. д.), а цели — эпизоды гипо- и гипертензии.
+PRESET = os.environ.get('CLUSTERBP_PRESET', 'pmp')
+TIME_UNIT = {'pmp': 'день', 'vitaldb': 'минута'}[PRESET]
 HISTORY_DAYS = 14      # окно истории
 STRIDE_DAYS = 3        # шаг между отсечками
 MIN_HIST_MEAS = 3      # минимум измерений в окне
 MAX_POINTS = 20        # длина последовательности для GRU
-FOLLOWUP_DAYS = 14     # после отсечки должно быть ≥ 14 дней наблюдения (макс. зазор + горизонт)
 N_FOLDS = 5
 INNER_VAL_FRAC = 0.2
 NEG_PER_POS = 3        # отрицательных на один положительный при обучении GRU
@@ -44,45 +50,102 @@ N_CLUSTERS = 3
 N_CLUST_PATIENTS = 1500
 GDTW_WINDOW = 14.0
 GDTW_GAMMA = 1.0
+LONG_SPANS = (30, 60, 90)   # длинная история: периоды до отсечки
 
-TARGETS = {
-    'A':   dict(codes=[33012, 33901, 33902], gap=1, horizon=7, full=True,
-                title='A: острый подъём (красные зоны)'),
-    'B':   dict(codes=[33601, 33801, 33802, 33810, 33911], gap=7, horizon=7, full=True,
-                title='B: превышение целевого АД (через неделю)'),
-    'OLD': dict(codes=[33901, 33900, 33012, 33601, 33801], gap=0, horizon=7, full=True,
-                title='OLD: цель из первой версии статьи'),
-    # Проверки чувствительности: только базовые правила, LR и XGBoost
-    'A_bp':      dict(codes=[33012, 33901], gap=1, horizon=7, full=False,
-                      title='A без 33902 (красная зона ЧП)'),
-    'B_no33810': dict(codes=[33601, 33801, 33802, 33911], gap=7, horizon=7, full=False,
-                      title='B без 33810 (признаки достижения ЦУ)'),
-    'B_gap0':    dict(codes=[33601, 33801, 33802, 33810, 33911], gap=0, horizon=7, full=False,
-                      title='B без зазора'),
-}
+if PRESET == 'pmp':
+    # Состав целей выбран по данным (см. results_v2/shift_subgroups/B_codes_*.csv):
+    # 33902 — красная зона пульса, а не давления; 33810 — «признаки достижения целевого АД», по смыслу противоположен B
+    # и появляется только в отдельные месяцы, давая скачки доли B. Старые составы оставлены как проверки чувствительности.
+    TARGETS = {
+        'A':   dict(codes=[33012, 33901], gap=1, horizon=7, full=True,
+                    title='A: острый подъём АД (красные зоны)'),
+        'B':   dict(codes=[33601, 33801, 33802, 33911], gap=7, horizon=7, full=True,
+                    title='B: превышение целевого АД (через неделю)'),
+        'OLD': dict(codes=[33901, 33900, 33012, 33601, 33801], gap=0, horizon=7, full=True,
+                    title='OLD: цель из первой версии статьи'),
+        # Проверки чувствительности: только базовые правила, LR и XGBoost
+        'A_with33902': dict(codes=[33012, 33901, 33902], gap=1, horizon=7, full=False,
+                            title='A с 33902 (красная зона ЧП) — состав первой версии v2'),
+        'B_with33810': dict(codes=[33601, 33801, 33802, 33810, 33911], gap=7, horizon=7, full=False,
+                            title='B с 33810 (признаки достижения ЦУ) — состав первой версии v2'),
+        'B_no33601':   dict(codes=[33801, 33802, 33911], gap=7, horizon=7, full=False,
+                            title='B без 33601 (код есть только с ноября 2024)'),
+        'B_gap0':      dict(codes=[33601, 33801, 33802, 33911], gap=0, horizon=7, full=False,
+                            title='B без зазора'),
+    }
+elif PRESET == 'vitaldb':
+    # Коды событий задаёт datasets/vitaldb.py: 90001 — минута со средним АД < 65, 90002 — минута с САД ≥ 160.
+    TARGETS = {
+        'A':   dict(codes=[90001], gap=5, horizon=5, full=True, title='A: гипотензия (САД ср. < 65) через 5–10 мин'),
+        'B':   dict(codes=[90002], gap=5, horizon=5, full=True, title='B: гипертензия (САД ≥ 160) через 5–10 мин'),
+        'OLD': dict(codes=[90001], gap=0, horizon=5, full=True, title='A без зазора'),
+    }
+else:
+    raise ValueError(f'Неизвестный CLUSTERBP_PRESET={PRESET}')
+FOLLOWUP_DAYS = max(cfg['gap'] + cfg['horizon'] for cfg in TARGETS.values())   # нужно наблюдение после отсечки
 EVENT_GROUPS = {name: cfg['codes'] for name, cfg in TARGETS.items()}
 EVENT_GROUPS['ALL'] = None   # все КЗС
+
+# Ветвь программы (experience / control). Если после исправления выбора программы в clusterbp_v2.ipynb ветвь
+# у большинства пациентов всё равно «undefined», поставьте False: признаки grp_* уйдут из моделей,
+# а анализ подгрупп по ветви будет пропущен.
+USE_ARM_FEATURES = os.environ.get('CLUSTERBP_USE_ARM', '1') == '1'
 
 BP_COLS = ['sbp_mean', 'sbp_std', 'sbp_min', 'sbp_max', 'sbp_last', 'sbp_slope', 'sbp_arv',
            'dbp_mean', 'dbp_std', 'dbp_min', 'dbp_max', 'dbp_last', 'dbp_slope', 'dbp_arv',
            'hr_mean', 'hr_std', 'hr_min', 'hr_max', 'hr_last', 'hr_slope', 'hr_arv',
            'pp_mean', 'pp_std', 'tir140', 'frac160', 'frac180', 'dbp_frac90', 'sbp_last3d_minus_prev',
            'n_meas', 'n_days', 'days_since_last_meas']
-STATIC_COLS = ['age', 'bmi', 'days_in_program', 'grp_experience', 'grp_control']
+STATIC_COLS = ['age', 'bmi', 'days_in_program'] + (['grp_experience', 'grp_control'] if USE_ARM_FEATURES else [])
 PHENO_COLS = ['cluster', 'pd0', 'pd1', 'pd2']
 EV_COLS = [f'ev_{g}_{k}' for g in ['A', 'B', 'OLD', 'ALL'] for k in ['7', '14', 'days_since']]
+LH_EV_GROUPS = ['A', 'B', 'ALL']
+LH_BP_COLS = [f'lh{L}_{n}' for L in LONG_SPANS for n in ['days', 'sbp_mean', 'sbp_sd', 'sbp_arv', 'sbp_slope',
+                                                          'sbp_frac140', 'dbp_mean', 'dbp_sd', 'sbp_mean14_minus']] \
+             + [f'lh{max(LONG_SPANS)}_sbp_daymax']
+LH_EV_COLS = [f'lh{L}_ev_{g}' for g in LH_EV_GROUPS for L in LONG_SPANS] \
+             + [f'lh_ev_{g}_{k}' for g in LH_EV_GROUPS for k in ['total', 'per_week']]
+LH_COLS = LH_BP_COLS + LH_EV_COLS
 FEATURE_SETS = {
     'paper6': ['sbp_mean', 'sbp_std', 'tir140', 'age', 'bmi', 'cluster'],
-    'bp': BP_COLS + STATIC_COLS + PHENO_COLS,
-    'full': BP_COLS + STATIC_COLS + PHENO_COLS + EV_COLS,
+    'bp': BP_COLS + STATIC_COLS + PHENO_COLS + LH_BP_COLS,          # всё про давление, без истории событий
+    'full': BP_COLS + STATIC_COLS + PHENO_COLS + EV_COLS + LH_COLS,
 }
-LR_COLS = BP_COLS + STATIC_COLS + ['c0', 'c1', 'c2', 'pd0', 'pd1', 'pd2'] + EV_COLS
+LR_COLS = BP_COLS + STATIC_COLS + ['c0', 'c1', 'c2', 'pd0', 'pd1', 'pd2'] + EV_COLS + LH_COLS
+
+
+# ---------------------------------------------------------------- кэш
+
+def config_hash():
+    """Хэш всего, от чего зависят окна, цели и признаки. Пишется рядом с кэшем и проверяется при загрузке."""
+    cfg = {'preset': PRESET, 'targets': {k: [sorted(v['codes']), v['gap'], v['horizon']] for k, v in TARGETS.items()},
+           'window': [HISTORY_DAYS, STRIDE_DAYS, MIN_HIST_MEAS, MAX_POINTS, FOLLOWUP_DAYS, PHENO_DAYS, list(LONG_SPANS)],
+           'full': FEATURE_SETS['full'], 'debug': DEBUG}
+    return hashlib.md5(json.dumps(cfg, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:10]
+
+
+def _meta_path(name, where):
+    return os.path.join(where, f'{name}.meta.json')
+
+
+def cache_is_current(name, where=None):
+    """True, если кэш name построен при текущих целях и признаках."""
+    p = _meta_path(name, where or CACHE_DIR)
+    return os.path.exists(p) and json.load(open(p)).get('hash') == config_hash()
+
+
+def mark_cache(name, where=None):
+    json.dump({'hash': config_hash()}, open(_meta_path(name, where or CACHE_DIR), 'w'))
 
 
 # ---------------------------------------------------------------- данные
 
 def load_cached():
     """Окна, последовательности и ряды для фенотипов, построенные в clusterbp_v2.ipynb, и его предсказания."""
+    check_windows()
+    if not cache_is_current('cv'):
+        raise RuntimeError('Предсказания кросс-валидации построены при других целях или признаках: '
+                           'перезапустите clusterbp_v2.ipynb.')
     win = pd.read_parquet(os.path.join(DATA_DIR, 'windows.parquet'))
     X_seq = np.load(os.path.join(DATA_DIR, 'X_seq.npy'))
     seq_len = np.load(os.path.join(DATA_DIR, 'seq_len.npy'))
@@ -91,6 +154,94 @@ def load_cached():
     assert (oof['pid'].values == win['pid'].values).all() and (oof['cut'].values == win['cut'].values).all()
     win['fold'] = oof['fold'].values
     return win, X_seq, seq_len, pheno_win, oof
+
+
+def check_windows():
+    """Окна в DATA_DIR должны быть построены при текущих целях и признаках (их строит clusterbp_v2.ipynb)."""
+    if not cache_is_current('windows', DATA_DIR):
+        raise RuntimeError(f'Окна в {DATA_DIR}/ построены при других целях или признаках (или до их проверки): '
+                           'перезапустите clusterbp_v2.ipynb — он перестроит их сам.')
+
+
+def event_counts(win, events, codes, lo_off, hi_off=0.0):
+    """Число событий из codes (None — все) в [cut − lo_off, cut − hi_off) для каждого окна."""
+    e = events if codes is None else events[events.code.isin(codes)]
+    e = e.sort_values(['pid', 'td'])
+    by_pid = {p: g.values for p, g in e.groupby('pid')['td']}
+    out = np.zeros(len(win))
+    cut = win['cut'].values
+    for p, idx in win.groupby('pid').indices.items():
+        t = by_pid.get(p)
+        if t is None:
+            continue
+        c = cut[idx]
+        out[idx] = np.searchsorted(t, c - hi_off) - np.searchsorted(t, c - lo_off)
+    return out
+
+
+def long_history_features(win, meas, events, spans=LONG_SPANS):
+    """Признаки за последние 30/60/90 дней до отсечки (столбцы LH_COLS) — по среднесуточным значениям.
+
+    По Rothwell прогностична долговременная (межсуточная) вариабельность САД, поэтому кроме среднего считаются SD,
+    ARV и наклон среднесуточного САД, доля дней со средним САД ≥ 140, отклонение последних 14 дней от долговременного
+    уровня и максимум. Счётчики событий A, B и всех КЗС — за те же периоды и за всё время в программе.
+    Используются только дни строго до отсечки (отсечка — полночь), поэтому признаки причинные.
+    """
+    m = meas[['pid', 'td', 'sbp', 'dbp']].copy()
+    m['day'] = np.floor(m['td'])
+    daily = m.groupby(['pid', 'day'])[['sbp', 'dbp']].mean().reset_index()
+    by_pid = {p: g for p, g in daily.groupby('pid')}
+    cols = {c: np.full(len(win), np.nan) for c in LH_BP_COLS}
+    P = lambda x: np.concatenate([[0.0], np.cumsum(x, dtype=np.float64)])
+    cut_all = win['cut'].values
+    for p, idx in win.groupby('pid').indices.items():
+        g = by_pid.get(p)
+        if g is None:
+            continue
+        d, s, db = g['day'].values, g['sbp'].values, g['dbp'].values
+        cut = cut_all[idx]
+        Ps, Ps2, Pd, Pd2 = P(s), P(s * s), P(db), P(db * db)
+        Phi = P((s >= 140).astype(float))
+        Pa = P(np.concatenate([[0.0], np.abs(np.diff(s))]))
+        Pu, Puu, Pus = P(d), P(d * d), P(d * s)
+        hi = np.searchsorted(d, cut)
+        lo14 = np.searchsorted(d, cut - 14)
+        n14 = hi - lo14
+        mean14 = np.where(n14 > 0, (Ps[hi] - Ps[lo14]) / np.maximum(n14, 1), np.nan)
+        for L in spans:
+            lo = np.searchsorted(d, cut - L)
+            n = hi - lo
+            ok, nn = n > 0, np.maximum(n, 1)
+            mean = (Ps[hi] - Ps[lo]) / nn
+            var = np.maximum((Ps2[hi] - Ps2[lo]) / nn - mean ** 2, 0) * nn / np.maximum(nn - 1, 1)
+            dmean = (Pd[hi] - Pd[lo]) / nn
+            dvar = np.maximum((Pd2[hi] - Pd2[lo]) / nn - dmean ** 2, 0) * nn / np.maximum(nn - 1, 1)
+            arv = np.where(n > 1, (Pa[hi] - Pa[np.minimum(lo + 1, hi)]) / np.maximum(n - 1, 1), np.nan)
+            su, suu, sus, ss_ = Pu[hi] - Pu[lo], Puu[hi] - Puu[lo], Pus[hi] - Pus[lo], Ps[hi] - Ps[lo]
+            den = n * suu - su ** 2
+            slope = np.where(den > 1e-9, (n * sus - su * ss_) / np.where(den > 1e-9, den, 1), np.nan)
+            vals = {'days': n, 'sbp_mean': np.where(ok, mean, np.nan), 'sbp_sd': np.where(n > 1, np.sqrt(var), np.nan),
+                    'sbp_arv': arv, 'sbp_slope': slope, 'sbp_frac140': np.where(ok, (Phi[hi] - Phi[lo]) / nn, np.nan),
+                    'dbp_mean': np.where(ok, dmean, np.nan), 'dbp_sd': np.where(n > 1, np.sqrt(dvar), np.nan),
+                    'sbp_mean14_minus': np.where(ok, mean14 - mean, np.nan)}
+            for k, v in vals.items():
+                cols[f'lh{L}_{k}'][idx] = v
+        cmax = np.full(len(cut), np.nan)
+        for i, c in enumerate(cut):
+            j0, j1 = np.searchsorted(d, c - max(spans)), np.searchsorted(d, c)
+            if j1 > j0:
+                cmax[i] = s[j0:j1].max()
+        cols[f'lh{max(spans)}_sbp_daymax'][idx] = cmax
+    f = pd.DataFrame(cols)
+    for g in LH_EV_GROUPS:
+        codes = EVENT_GROUPS[g]
+        for L in spans:
+            f[f'lh{L}_ev_{g}'] = event_counts(win, events, codes, L)
+        total = event_counts(win, events, codes, 1e9)
+        f[f'lh_ev_{g}_total'] = total
+        f[f'lh_ev_{g}_per_week'] = total / np.maximum(win['days_in_program'].values, 1) * 7
+    assert set(f.columns) == set(LH_COLS), 'столбцы long_history_features расходятся с LH_COLS'
+    return f[LH_COLS]
 
 
 def fold_masks(win, k):
@@ -200,6 +351,29 @@ def assign_phenotypes(pheno_win, templates):
     dist = assign_gdtw(pheno_win, templates, GDTW_WINDOW, GDTW_GAMMA)
     cl = np.where(np.isnan(dist).all(1), -1, np.nanargmin(np.where(np.isnan(dist), np.inf, dist), axis=1))
     return cl, dist
+
+
+def full_history_profiles(meas):
+    """Ряд среднесуточного САД за ВСЁ наблюдение пациента, сжатый до PHENO_DAYS точек (нормированное время).
+
+    Так фенотип строился в первой версии статьи: по всему ряду, включая будущее относительно прогноза.
+    Нужен только аудиту утечек (переключатель «фенотип по всей истории»); в моделях не используется.
+    Возвращает (матрица [пациенты × PHENO_DAYS], массив pid).
+    """
+    m = meas[['pid', 'td', 'sbp']].copy()
+    m['day'] = np.floor(m['td'])
+    daily = m.groupby(['pid', 'day'])['sbp'].mean().reset_index()
+    rows, pids = [], []
+    for p, g in daily.groupby('pid'):
+        d = g['day'].values
+        span = d[-1] - d[0] + 1
+        b = np.minimum(((d - d[0]) / span * PHENO_DAYS).astype(int), PHENO_DAYS - 1)
+        prof = np.full(PHENO_DAYS, np.nan, dtype=np.float32)
+        sums, cnt = np.bincount(b, g['sbp'].values, PHENO_DAYS), np.bincount(b, minlength=PHENO_DAYS)
+        prof[cnt > 0] = sums[cnt > 0] / cnt[cnt > 0]
+        rows.append(prof)
+        pids.append(p)
+    return np.stack(rows), np.array(pids)
 
 
 def set_phenotype_columns(win, cl, dist):

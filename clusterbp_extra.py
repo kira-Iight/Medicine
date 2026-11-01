@@ -3,7 +3,8 @@
 Использует окна, построенные в clusterbp_v2.ipynb (cache_v2*/windows.parquet и ряды для фенотипов).
 Разбиение на фолды берётся из oof_predictions.parquet, если он есть, иначе строится тем же
 StratifiedGroupKFold, что и в clusterbp_v2.ipynb, поэтому фолды совпадают с основным ноутбуком.
-Шаблоны фенотипов фолда берутся из models/templates_fold{k}.npy, если они уже есть, иначе строятся заново
+Предсказания и модели основного ноутбука используются, только если они построены при текущих целях и признаках
+(см. cache_is_current в clusterbp_lib.py). Шаблоны фенотипов фолда берутся из models/templates_fold{k}.npy, если они уже есть, иначе строятся заново
 (только по обучающим пациентам фолда) и сохраняются.
 """
 import os
@@ -16,10 +17,11 @@ from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
 
 from clusterbp_lib import (RAW_DIR, DATA_DIR, CACHE_DIR, MODELS_DIR, SEED, N_FOLDS, N_CLUSTERS, TARGETS,
-                           fit_phenotypes, assign_phenotypes, set_phenotype_columns, fit_xgb, best_threshold)
+                           fit_phenotypes, assign_phenotypes, set_phenotype_columns, fit_xgb, best_threshold,
+                           check_windows, config_hash, cache_is_current, full_history_profiles,
+                           event_counts, long_history_features, LONG_SPANS)   # реэкспорт для ноутбуков
 
 N_BOOT = int(os.environ.get('CLUSTERBP_N_BOOT', 1000))
-DAY = 1.0
 
 
 # ---------------------------------------------------------------- данные
@@ -37,12 +39,13 @@ def to_days(s):
 
 def load_windows():
     """Окна и ряды для фенотипов из clusterbp_v2.ipynb; столбец fold — как в основном ноутбуке."""
+    check_windows()
     win = pd.read_parquet(os.path.join(DATA_DIR, 'windows.parquet'))
     pheno_win = np.load(os.path.join(DATA_DIR, 'pheno_win.npy'))
     pheno_first = np.load(os.path.join(DATA_DIR, 'pheno_first.npy'))
     pheno_first_pid = np.load(os.path.join(DATA_DIR, 'pheno_first_pid.npy'))
     oof_path = os.path.join(CACHE_DIR, 'oof_predictions.parquet')
-    if os.path.exists(oof_path):
+    if os.path.exists(oof_path) and cache_is_current('cv'):
         oof = pd.read_parquet(oof_path, columns=['pid', 'cut', 'fold'])
         assert (oof['pid'].values == win['pid'].values).all() and (oof['cut'].values == win['cut'].values).all()
         win['fold'] = oof['fold'].values
@@ -58,35 +61,58 @@ def load_windows():
 def load_oof_scores(win):
     """Предсказания clusterbp_v2.ipynb (если есть) — чтобы не переобучать XGB_full там, где он нужен как есть."""
     path = os.path.join(CACHE_DIR, 'oof_predictions.parquet')
-    if not os.path.exists(path):
+    if not os.path.exists(path) or not cache_is_current('cv'):
         return None
     oof = pd.read_parquet(path)
     assert (oof['pid'].values == win['pid'].values).all()
     return oof
 
 
-def phenotypes(win, pheno_win, pheno_first, pheno_first_pid, k, all_patients=False):
+def phenotypes(win, pheno_win, pheno_first, pheno_first_pid, k, mode='train', meas=None):
     """Ставит в win столбцы фенотипа для фолда k и возвращает кластеры окон.
 
-    all_patients=True — ошибка из аудита утечек: шаблоны строятся по всем пациентам, включая тестовых.
-    Назначения окон кешируются, потому что GDTW по всем окнам — самая долгая часть.
+    mode:
+    - 'train' — корректно: шаблоны по первым 30 дням обучающих пациентов фолда, окно — по своим прошлым 30 дням;
+    - 'all' — ошибка: шаблоны по всем пациентам, включая тестовых (назначение окон — как в 'train');
+    - 'full_history' — ошибка первой версии статьи: шаблоны по всем пациентам и по ВСЕМУ ряду, кластер назначается
+      пациенту один раз по всему его ряду (включая будущее) и ставится во все его окна. Нужен meas.
+    Назначения кешируются (GDTW по всем окнам — самая долгая часть); кэш проверяется по числу окон.
     """
-    key = 'all' if all_patients else f'fold{k}'
+    key = {'train': f'fold{k}', 'all': 'all', 'full_history': 'full_history'}[mode]
     cache = os.path.join(CACHE_DIR, f'pheno_assign_{key}.npz')
     if os.path.exists(cache):
         z = np.load(cache)
-        cl, dist = z['cl'], z['dist']
+        if len(z['cl']) == len(win):
+            set_phenotype_columns(win, z['cl'], z['dist'])
+            return z['cl']
+    pids = win['pid'].values
+    if mode == 'full_history':
+        if meas is None:
+            raise ValueError("для mode='full_history' нужен meas")
+        P, P_pid = full_history_profiles(meas)
+        tpath = os.path.join(MODELS_DIR, 'templates_full_history.npy')
+        if os.path.exists(tpath):
+            templates = np.load(tpath)
+        else:
+            templates, _, _ = fit_phenotypes(P, P_pid, P_pid, SEED)
+            np.save(tpath, templates)
+        cl_p, dist_p = assign_phenotypes(P, templates)
+        pos = pd.Series(np.arange(len(P_pid)), index=P_pid).reindex(pids).values
+        ok = ~np.isnan(pos)
+        cl = np.full(len(win), -1)
+        dist = np.full((len(win), dist_p.shape[1]), np.nan)
+        cl[ok] = cl_p[pos[ok].astype(int)]
+        dist[ok] = dist_p[pos[ok].astype(int)]
     else:
         tpath = os.path.join(MODELS_DIR, f'templates_{key}.npy')
         if os.path.exists(tpath):
             templates = np.load(tpath)
         else:
-            pids = win['pid'].values
-            train_pids = np.unique(pids) if all_patients else np.unique(pids[win['fold'].values != k])
-            templates, _, _ = fit_phenotypes(pheno_first, pheno_first_pid, train_pids, SEED + (0 if all_patients else k))
+            train_pids = np.unique(pids) if mode == 'all' else np.unique(pids[win['fold'].values != k])
+            templates, _, _ = fit_phenotypes(pheno_first, pheno_first_pid, train_pids, SEED + (0 if mode == 'all' else k))
             np.save(tpath, templates)
         cl, dist = assign_phenotypes(pheno_win, templates)
-        np.savez(cache, cl=cl, dist=dist)
+    np.savez(cache, cl=cl, dist=dist)
     set_phenotype_columns(win, cl, dist)
     return cl
 
@@ -104,22 +130,6 @@ def event_target(win, events, codes, gap, horizon):
         a0 = cut[idx] + gap
         y[idx] = (np.searchsorted(t, a0 + horizon) - np.searchsorted(t, a0)) > 0
     return y
-
-
-def event_counts(win, events, codes, lo_off, hi_off=0.0):
-    """Число событий из codes (None — все) в [cut − lo_off, cut − hi_off)."""
-    e = events if codes is None else events[events.code.isin(codes)]
-    e = e.sort_values(['pid', 'td'])
-    by_pid = {p: g.values for p, g in e.groupby('pid')['td']}
-    out = np.zeros(len(win))
-    cut = win['cut'].values
-    for p, idx in win.groupby('pid').indices.items():
-        t = by_pid.get(p)
-        if t is None:
-            continue
-        c = cut[idx]
-        out[idx] = np.searchsorted(t, c - hi_off) - np.searchsorted(t, c - lo_off)
-    return out
 
 
 # ---------------------------------------------------------------- модели
@@ -247,94 +257,6 @@ def calib(y, p):
     return p.mean() / max(y.mean(), 1e-12), float((np.abs(obs - pr) * wts).sum())
 
 
-# ---------------------------------------------------------------- длинная история (30–90 дней)
-
-LONG_SPANS = (30, 60, 90)
-
-
-def long_history_features(win, meas, events, spans=LONG_SPANS):
-    """Признаки за последние 30/60/90 дней до отсечки — по среднесуточным значениям (межсуточная вариабельность).
-
-    По Rothwell прогностична долговременная вариабельность САД, поэтому кроме среднего считаются SD, ARV
-    и наклон среднесуточного САД, доля дней со средним САД ≥ 140 и отклонение последних 14 дней от
-    долговременного уровня. Счётчики событий A, B и всех КЗС — за те же периоды и за всё время в программе.
-    Все признаки используют только данные до отсечки.
-    """
-    path = os.path.join(DATA_DIR, 'features_long.parquet')
-    if os.path.exists(path):
-        f = pd.read_parquet(path)
-        if len(f) == len(win) and (f['pid'].values == win['pid'].values).all() and (f['cut'].values == win['cut'].values).all():
-            return f.drop(columns=['pid', 'cut'])
-    t0 = time.time()
-    m = meas[['pid', 'td', 'sbp', 'dbp']].copy()
-    m['day'] = np.floor(m['td'])
-    daily = m.groupby(['pid', 'day'])[['sbp', 'dbp']].mean().reset_index()
-    by_pid = {p: g for p, g in daily.groupby('pid')}
-    cols = {}
-
-    def put(name, idx, val):
-        cols.setdefault(name, np.full(len(win), np.nan))[idx] = val
-
-    cut_all = win['cut'].values
-    for p, idx in win.groupby('pid').indices.items():
-        g = by_pid.get(p)
-        if g is None:
-            continue
-        d = g['day'].values
-        s = g['sbp'].values
-        db = g['dbp'].values
-        cut = cut_all[idx]
-        P = lambda x: np.concatenate([[0.0], np.cumsum(x, dtype=np.float64)])
-        Ps, Ps2, Pd, Pd2 = P(s), P(s * s), P(db), P(db * db)
-        Phi = P((s >= 140).astype(float))
-        Pa = P(np.concatenate([[0.0], np.abs(np.diff(s))]))
-        Pu, Puu, Pus = P(d), P(d * d), P(d * s)
-        hi = np.searchsorted(d, cut)                 # дни строго до отсечки (отсечка — полночь)
-        lo14 = np.searchsorted(d, cut - 14)
-        n14 = hi - lo14
-        mean14 = np.where(n14 > 0, (Ps[hi] - Ps[lo14]) / np.maximum(n14, 1), np.nan)
-        for L in spans:
-            lo = np.searchsorted(d, cut - L)
-            n = hi - lo
-            ok = n > 0
-            nn = np.maximum(n, 1)
-            mean = (Ps[hi] - Ps[lo]) / nn
-            var = np.maximum((Ps2[hi] - Ps2[lo]) / nn - mean ** 2, 0) * nn / np.maximum(nn - 1, 1)
-            dmean = (Pd[hi] - Pd[lo]) / nn
-            dvar = np.maximum((Pd2[hi] - Pd2[lo]) / nn - dmean ** 2, 0) * nn / np.maximum(nn - 1, 1)
-            arv = np.where(n > 1, (Pa[hi] - Pa[np.minimum(lo + 1, hi)]) / np.maximum(n - 1, 1), np.nan)
-            su, suu, sus, ss_ = Pu[hi] - Pu[lo], Puu[hi] - Puu[lo], Pus[hi] - Pus[lo], Ps[hi] - Ps[lo]
-            den = n * suu - su ** 2
-            slope = np.where(den > 1e-9, (n * sus - su * ss_) / np.where(den > 1e-9, den, 1), np.nan)
-            put(f'lh{L}_days', idx, n)
-            put(f'lh{L}_sbp_mean', idx, np.where(ok, mean, np.nan))
-            put(f'lh{L}_sbp_sd', idx, np.where(n > 1, np.sqrt(var), np.nan))
-            put(f'lh{L}_sbp_arv', idx, arv)
-            put(f'lh{L}_sbp_slope', idx, slope)
-            put(f'lh{L}_sbp_frac140', idx, np.where(ok, (Phi[hi] - Phi[lo]) / nn, np.nan))
-            put(f'lh{L}_dbp_mean', idx, np.where(ok, dmean, np.nan))
-            put(f'lh{L}_dbp_sd', idx, np.where(n > 1, np.sqrt(dvar), np.nan))
-            put(f'lh{L}_sbp_mean14_minus', idx, np.where(ok, mean14 - mean, np.nan))
-        cmax = np.array([np.nan] * len(cut))
-        for i, c in enumerate(cut):
-            j0, j1 = np.searchsorted(d, c - max(spans)), np.searchsorted(d, c)
-            if j1 > j0:
-                cmax[i] = s[j0:j1].max()
-        put(f'lh{max(spans)}_sbp_daymax', idx, cmax)
-
-    f = pd.DataFrame(cols)
-    for g, codes in [('A', TARGETS['A']['codes']), ('B', TARGETS['B']['codes']), ('ALL', None)]:
-        for L in spans:
-            f[f'lh{L}_ev_{g}'] = event_counts(win, events, codes, L)
-        total = event_counts(win, events, codes, 1e6)
-        f[f'lh_ev_{g}_total'] = total
-        f[f'lh_ev_{g}_per_week'] = total / np.maximum(win['days_in_program'].values, 1) * 7
-    out = pd.concat([win[['pid', 'cut']].reset_index(drop=True), f], axis=1)
-    out.to_parquet(path)
-    print(f'Признаки длинной истории: {f.shape[1]} шт., {time.time() - t0:.0f} с')
-    return f
-
-
 # ---------------------------------------------------------------- терапия
 
 # Классы препаратов по МНН (подстрока или регулярное выражение). Комбинированные препараты дают несколько классов.
@@ -347,7 +269,7 @@ DRUG_CLASSES = [
     ('центральный', r'моксонидин|клонидин|метилдопа|рилменидин'),
     ('альфа-блокатор', r'доксазозин|урапидил|празозин|теразозин'),
     ('прочий гипотензивный', r'алискирен|сакубитрил'),
-    ('статин', r'статин'),
+    ('статин', r'(аторва|розува|симва|флува|питава|права|лова)статин'),   # не «нистатин»
     ('антиагрегант/антикоагулянт', r'ацетилсалицил|клопидогрел|тикагрелор|варфарин|апиксабан|ривароксабан|дабигатран'),
 ]
 AH_CLASSES = ['ИАПФ', 'БРА', 'БКК', 'ББ', 'диуретик', 'центральный', 'альфа-блокатор', 'прочий гипотензивный']
@@ -386,7 +308,7 @@ def load_therapy():
 
 def therapy_features(win, th):
     """Признаки терапии на момент отсечки (только назначения, известные строго до дня отсечки)."""
-    path = os.path.join(DATA_DIR, 'features_therapy.parquet')
+    path = os.path.join(DATA_DIR, f'features_therapy_{config_hash()}.parquet')   # хэш целей и окон в имени
     if os.path.exists(path):
         f = pd.read_parquet(path)
         if len(f) == len(win) and (f['pid'].values == win['pid'].values).all() and (f['cut'].values == win['cut'].values).all():

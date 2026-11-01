@@ -1,0 +1,20 @@
+    2025_04_15/
+cache_v2/
+cache_v2_debug/
+results_v2_debug/
+__pycache__/
+# Разборы отдельных пациентов и внутренние документы — не для публичного репозитория
+results_v2/interpret/local_cases_*.png
+results_v2/*.docx
+paper_notes/
+# Синтетика: генерируется скриптом synthetic/make_rule_based_data.py
+synthetic/rule_based/
+synthetic/run/
+cache_v2_synthetic*/
+results_v2_synthetic*/
+# Производные от закрытой выгрузки (удалены из истории): не добавлять обратно
+data/
+cache/
+raw_data/
+cache_v2_*/
+results_v2_vitaldb*/
