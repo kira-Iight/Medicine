@@ -1,4 +1,4 @@
-target,comparison,metric,delta,95% ДИ,p (двусторонний)
+target,comparison,metric,delta,95% CI,p (two-sided)
 A,Gate_pheno − Stack_global,AUROC,7.11238624148125e-05,[-0.000; 0.000],0.32
 A,Gate_pheno − Stack_global,AUPRC,0.0002158051550937845,[-0.000; 0.001],0.436
 A,Gate_pheno − Stack_global,macro_F1,-0.0002188955802040482,[-0.001; 0.001],0.532

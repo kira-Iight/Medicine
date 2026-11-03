@@ -1,26 +1,26 @@
 """
-Синтетическая выгрузка для проверки пайплайна ClusterBP v2 без доступа к закрытым данным.
+Synthetic export for testing the ClusterBP v2 pipeline without access to the proprietary data.
 
-В отличие от make_synthetic_data.py (SDV), генератор не обучается на реальных данных вообще:
-у каждого пациента моделируется ряд давления на несколько месяцев, а клинически значимые события
-(КЗС) выставляются по правилам «зон», похожим на правила системы мониторинга. Структура и имена
-файлов совпадают с выгрузкой оператора, поэтому ноутбуки clusterbp_v2*.ipynb работают на ней без изменений.
+The generator is not trained on real data at all: a blood pressure series over several months is simulated
+for each patient, and clinically significant events are assigned by "zone" rules similar to those of the
+monitoring system. The file structure and names (in Russian, as in the operator's export) match the real export,
+so the clusterbp_v2*.ipynb notebooks run on it unchanged.
 
-Модель ряда: базовый уровень САД + медленный тренд + дневная AR(1)-компонента + шум измерения +
-эпизоды подъёма (нарастание 2–4 дня, плато, спад). ДАД и ЧП связаны с САД. События:
-- 33012 / 33901 — «красная зона АД» (САД ≥ 180 или ДАД ≥ 110), автоматически и с подтверждением врача;
-- 33902 / 33006 — «красная зона ЧП» (ЧП ≥ 110); 33004 — «синяя зона АД» (САД < 100);
-- 33921 — «жёлтая зона АД» (САД 160–179); 33900 — «критическое отклонение» (САД ≥ 200);
-- еженедельно по средним за 7 дней: 33911 «оранжевая зона» (САД ≥ 140), 33801 / 33802 «ускользание ЦУ»,
-  33810 «признаки достижения ЦУ» (САД < 130), 33430 «отсутствие измерений»;
-- 33601 — редкая «красная зона (э)»; 77710 — протокол первого месяца.
+Series model: baseline SBP + slow trend + daily AR(1) component + measurement noise +
+surge episodes (2–4-day rise, plateau, decline). DBP and HR are linked to SBP. Events:
+- 33012 / 33901 — "BP red zone" (SBP ≥ 180 or DBP ≥ 110), automatic and physician-confirmed;
+- 33902 / 33006 — "HR red zone" (HR ≥ 110); 33004 — "BP blue zone" (SBP < 100);
+- 33921 — "BP yellow zone" (SBP 160–179); 33900 — "critical deviation" (SBP ≥ 200);
+- weekly from 7-day means: 33911 "orange zone" (SBP ≥ 140), 33801 / 33802 "loss of target BP control",
+  33810 "signs of reaching target BP" (SBP < 130), 33430 "no measurements";
+- 33601 — rare "red zone (e)"; 77710 — first-month protocol.
 
-Цифры качества моделей на этих данных не имеют клинического смысла: данные нужны только для того,
-чтобы весь пайплайн можно было запустить и проверить.
+Model performance on these data has no clinical meaning: the data only serve to run and check
+the whole pipeline.
 
-Использование:
+Usage:
     python synthetic/make_rule_based_data.py [--patients 1500] [--seed 42] [--out synthetic/rule_based]
-Запуск пайплайна на результате (результаты пишутся в cache_v2_synthetic/ и results_v2_synthetic/):
+Running the pipeline on the output (results go to cache_v2_synthetic/ and results_v2_synthetic/):
     CLUSTERBP_RAW_DIR=synthetic/rule_based CLUSTERBP_TAG=synthetic jupyter nbconvert --execute ... clusterbp_v2.ipynb
 """
 import argparse
@@ -42,7 +42,7 @@ START, END = pd.Timestamp('2023-11-15'), pd.Timestamp('2025-01-05')
 
 
 def surge_profile(n_days, rng, rate):
-    """Сумма эпизодов подъёма давления: нарастание 2–4 дня, плато 1–2 дня, спад 2–3 дня."""
+    """Sum of BP surge episodes: 2–4-day rise, 1–2-day plateau, 2–3-day decline."""
     prof = np.zeros(n_days)
     for start in np.flatnonzero(rng.random(n_days) < rate):
         amp = rng.uniform(20, 50)
@@ -70,7 +70,7 @@ def simulate_patient(i, rng, regions):
     ar = np.zeros(n_days)
     for d in range(1, n_days):
         ar[d] = 0.7 * ar[d - 1] + rng.normal(0, sd_day)
-    rate = rng.gamma(1.0, 1 / 100)                     # эпизоды подъёма: в среднем раз в ~3 месяца, разброс между пациентами
+    rate = rng.gamma(1.0, 1 / 100)                     # surge episodes: on average once in ~3 months, varying between patients
     sbp_day = base + trend * np.arange(n_days) + ar + surge_profile(n_days, rng, rate)
     dbp_off, hr_base = rng.normal(12, 5), rng.normal(72, 8)
     tachy_rate = rng.gamma(0.5, 1 / 200)
@@ -95,7 +95,7 @@ def simulate_patient(i, rng, regions):
 
 
 def zone_events(p, rng):
-    """КЗС по правилам зон: по отдельным измерениям и по еженедельным средним."""
+    """Events by zone rules: from single measurements and from weekly means."""
     ev = []
     m = p['meas']
     for t, sbp, dbp, hr in m.itertuples(index=False):
@@ -148,7 +148,7 @@ def main():
     args = ap.parse_args()
     rng = np.random.default_rng(args.seed)
     os.makedirs(args.out, exist_ok=True)
-    regions = [(i, f'Регион {i:02d}') for i in range(1, 20)]
+    regions = [(i, f'Region {i:02d}') for i in range(1, 20)]
 
     patients = [simulate_patient(i, rng, regions) for i in range(args.patients)]
     prim, events, links, therapy = [], [], [], []
@@ -162,8 +162,8 @@ def main():
         doctor = int(rng.integers(30000, 40000))
         for t, sbp, dbp, hr in p['meas'].itertuples(index=False):
             srv = t + pd.Timedelta(seconds=float(rng.uniform(2, 40)))
-            prim.append([fmt(t), fmt(srv), p['tz'], sbp, dbp, hr, 'Тонометр', serial, f'reg-{p["pid"]}', 'true',
-                         p['pid'], f'P{p["pid"]}', p['mo_id'], f'МО {p["mo_id"]}', p['region_id'], doctor, birth,
+            prim.append([fmt(t), fmt(srv), p['tz'], sbp, dbp, hr, 'Tonometer', serial, f'reg-{p["pid"]}', 'true',
+                         p['pid'], f'P{p["pid"]}', p['mo_id'], f'MO {p["mo_id"]}', p['region_id'], doctor, birth,
                          height, weight, diag, '', p['prog']])
         for t, code in zone_events(p, rng):
             events.append([p['prog'], p['pid'], fmt(t), code])
@@ -190,9 +190,9 @@ def main():
            'принимаемая терапия (да/нет)', 'МНН', 'время приема', 'регулярность', 'способ применения',
            'продолж. приема на момент выгрузки', 'дата начала приема', 'дата окончания приема'], therapy)
     write('Идентификаторы МО 15.04.2025.csv', ['id МО', 'название МО'],
-          sorted({(p['mo_id'], f'МО {p["mo_id"]}') for p in patients}))
+          sorted({(p['mo_id'], f'MO {p["mo_id"]}') for p in patients}))
     write('Идентификаторы Субъектов 10.04.2025.csv', ['id субъекта', 'название субъекта'], regions, sep=';')
-    print(f'Пациентов: {len(patients)}, измерений: {len(prim):,}, событий: {len(events):,} -> {args.out}')
+    print(f'Patients: {len(patients)}, measurements: {len(prim):,}, events: {len(events):,} -> {args.out}')
 
 
 if __name__ == '__main__':

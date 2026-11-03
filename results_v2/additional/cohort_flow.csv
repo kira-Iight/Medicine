@@ -1,7 +1,7 @@
-,значение
-программ наблюдения в выгрузке,13943
-уникальных пациентов в программах,11739
-пациентов с измерениями после очистки,10937
-пациентов хотя бы с одним окном (когорта моделирования),9413
-окон,420355
-измерений у пациентов когорты,4758075
+,value
+monitoring programmes in the export,13943
+unique patients in programmes,11739
+patients with measurements after cleaning,10937
+patients with at least one window (modelling cohort),9413
+windows,420355
+measurements of cohort patients,4758075

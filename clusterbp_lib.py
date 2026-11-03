@@ -1,11 +1,11 @@
-"""Общий код ClusterBP v2 (clusterbp_v2*.ipynb): цели, признаки, фенотипы GDTW, модели, метрики.
+"""Shared code for ClusterBP v2 (clusterbp_v2*.ipynb): targets, features, GDTW phenotypes, models, metrics.
 
-Переменные окружения:
-- CLUSTERBP_DEBUG=1 — быстрый прогон на 1 500 пациентах; модели, предсказания и таблицы пишутся
-  в cache_v2_debug/ и results_v2_debug/, чтобы не затереть результаты полного прогона;
-- CLUSTERBP_RAW_DIR — папка с выгрузкой (по умолчанию 2025_04_15);
-- CLUSTERBP_TAG — метка другого набора данных (например, synthetic): все промежуточные данные и результаты
-  пишутся в отдельные папки cache_v2_<метка>/ и results_v2_<метка>/.
+Environment variables:
+- CLUSTERBP_DEBUG=1 — quick run on 1,500 patients; models, predictions and tables are written
+  to cache_v2_debug/ and results_v2_debug/ so that the full run is not overwritten;
+- CLUSTERBP_RAW_DIR — folder with the operator's export (default 2025_04_15);
+- CLUSTERBP_TAG — tag of another dataset (e.g. synthetic): all intermediate data and results
+  go to separate folders cache_v2_<tag>/ and results_v2_<tag>/.
 """
 import hashlib
 import json
@@ -22,73 +22,73 @@ from sklearn.metrics import average_precision_score, f1_score
 from xgboost import XGBClassifier
 
 DEBUG = os.environ.get('CLUSTERBP_DEBUG') == '1'
-RAW_DIR = os.environ.get('CLUSTERBP_RAW_DIR', '2025_04_15')   # исходная выгрузка оператора (не в git)
+RAW_DIR = os.environ.get('CLUSTERBP_RAW_DIR', '2025_04_15')   # operator's raw export (not in git)
 _TAG = os.environ.get('CLUSTERBP_TAG', '')
 _SUFFIX = f'_{_TAG}' if _TAG else ''
-DATA_DIR = 'cache_v2' + _SUFFIX                                # очищенные данные и окна
-CACHE_DIR = DATA_DIR + ('_debug' if DEBUG else '')             # модели и предсказания
+DATA_DIR = 'cache_v2' + _SUFFIX                                # cleaned data and windows
+CACHE_DIR = DATA_DIR + ('_debug' if DEBUG else '')             # models and predictions
 RESULTS_DIR = 'results_v2' + _SUFFIX + ('_debug' if DEBUG else '')
 MODELS_DIR = os.path.join(CACHE_DIR, 'models')
 for _d in [DATA_DIR, CACHE_DIR, RESULTS_DIR, MODELS_DIR]:
     os.makedirs(_d, exist_ok=True)
 
 SEED = 42
-# Набор данных и шкала времени. 'pmp' — выгрузка оператора (время в днях). 'vitaldb' — открытый набор VitalDB,
-# подготовленный datasets/prepare_vitaldb.py: время в минутах, поэтому все длительности ниже читаются в минутах
-# (окно истории 14 мин, шаг 3 мин и т. д.), а цели — эпизоды гипо- и гипертензии.
+# Dataset and time scale. 'pmp' — the operator's export (time in days). 'vitaldb' — the open VitalDB dataset
+# prepared by datasets/prepare_vitaldb.py: time in minutes, so all durations below are read in minutes
+# (14-min history window, 3-min stride, etc.), and the targets are hypo- and hypertension episodes.
 PRESET = os.environ.get('CLUSTERBP_PRESET', 'pmp')
-TIME_UNIT = {'pmp': 'день', 'vitaldb': 'минута'}[PRESET]
-HISTORY_DAYS = 14      # окно истории
-STRIDE_DAYS = 3        # шаг между отсечками
-MIN_HIST_MEAS = 3      # минимум измерений в окне
-MAX_POINTS = 20        # длина последовательности для GRU
+TIME_UNIT = {'pmp': 'day', 'vitaldb': 'minute'}[PRESET]
+HISTORY_DAYS = 14      # history window
+STRIDE_DAYS = 3        # stride between cutoffs
+MIN_HIST_MEAS = 3      # minimum measurements per window
+MAX_POINTS = 20        # sequence length for the GRU
 N_FOLDS = 5
 INNER_VAL_FRAC = 0.2
-NEG_PER_POS = 3        # отрицательных на один положительный при обучении GRU
-PHENO_DAYS = 30        # длина ряда для фенотипа
+NEG_PER_POS = 3        # negatives per positive when training the GRU
+PHENO_DAYS = 30        # series length for the phenotype
 N_CLUSTERS = 3
 N_CLUST_PATIENTS = 1500
 GDTW_WINDOW = 14.0
 GDTW_GAMMA = 1.0
-LONG_SPANS = (30, 60, 90)   # длинная история: периоды до отсечки
+LONG_SPANS = (30, 60, 90)   # long history: periods before the cutoff
 
 if PRESET == 'pmp':
-    # Состав целей выбран по данным (см. results_v2/shift_subgroups/B_codes_*.csv):
-    # 33902 — красная зона пульса, а не давления; 33810 — «признаки достижения целевого АД», по смыслу противоположен B
-    # и появляется только в отдельные месяцы, давая скачки доли B. Старые составы оставлены как проверки чувствительности.
+    # Target codes were chosen from the data (see results_v2/shift_subgroups/B_codes_*.csv):
+    # 33902 is a heart-rate red zone, not a BP event; 33810 ("signs of reaching target BP") is the opposite of B
+    # and appears only in some months, causing jumps in the B rate. Earlier code sets are kept as sensitivity checks.
     TARGETS = {
         'A':   dict(codes=[33012, 33901], gap=1, horizon=7, full=True,
-                    title='A: острый подъём АД (красные зоны)'),
+                    title='A: acute BP rise (red zones)'),
         'B':   dict(codes=[33601, 33801, 33802, 33911], gap=7, horizon=7, full=True,
-                    title='B: превышение целевого АД (через неделю)'),
+                    title='B: BP above target (one week ahead)'),
         'OLD': dict(codes=[33901, 33900, 33012, 33601, 33801], gap=0, horizon=7, full=True,
-                    title='OLD: цель из первой версии статьи'),
-        # Проверки чувствительности: только базовые правила, LR и XGBoost
+                    title='OLD: target of the first paper version'),
+        # Sensitivity checks: baseline rules, LR and XGBoost only
         'A_with33902': dict(codes=[33012, 33901, 33902], gap=1, horizon=7, full=False,
-                            title='A с 33902 (красная зона ЧП) — состав первой версии v2'),
+                            title='A with 33902 (heart-rate red zone), first v2 code set'),
         'B_with33810': dict(codes=[33601, 33801, 33802, 33810, 33911], gap=7, horizon=7, full=False,
-                            title='B с 33810 (признаки достижения ЦУ) — состав первой версии v2'),
+                            title='B with 33810 (signs of reaching target BP), first v2 code set'),
         'B_no33601':   dict(codes=[33801, 33802, 33911], gap=7, horizon=7, full=False,
-                            title='B без 33601 (код есть только с ноября 2024)'),
+                            title='B without 33601 (code exists only from November 2024)'),
         'B_gap0':      dict(codes=[33601, 33801, 33802, 33911], gap=0, horizon=7, full=False,
-                            title='B без зазора'),
+                            title='B without gap'),
     }
 elif PRESET == 'vitaldb':
-    # Коды событий задаёт datasets/prepare_vitaldb.py: 90001 — минута со средним АД < 65, 90002 — минута с САД ≥ 160.
+    # Event codes are set by datasets/prepare_vitaldb.py: 90001 — minute with MAP < 65, 90002 — minute with SBP ≥ 160.
     TARGETS = {
-        'A':   dict(codes=[90001], gap=5, horizon=5, full=True, title='A: гипотензия (САД ср. < 65) через 5–10 мин'),
-        'B':   dict(codes=[90002], gap=5, horizon=5, full=True, title='B: гипертензия (САД ≥ 160) через 5–10 мин'),
-        'OLD': dict(codes=[90001], gap=0, horizon=5, full=True, title='A без зазора'),
+        'A':   dict(codes=[90001], gap=5, horizon=5, full=True, title='A: hypotension (MAP < 65) in 5–10 min'),
+        'B':   dict(codes=[90002], gap=5, horizon=5, full=True, title='B: hypertension (SBP ≥ 160) in 5–10 min'),
+        'OLD': dict(codes=[90001], gap=0, horizon=5, full=True, title='A without gap'),
     }
 else:
-    raise ValueError(f'Неизвестный CLUSTERBP_PRESET={PRESET}')
-FOLLOWUP_DAYS = max(cfg['gap'] + cfg['horizon'] for cfg in TARGETS.values())   # нужно наблюдение после отсечки
+    raise ValueError(f'Unknown CLUSTERBP_PRESET={PRESET}')
+FOLLOWUP_DAYS = max(cfg['gap'] + cfg['horizon'] for cfg in TARGETS.values())   # follow-up needed after the cutoff
 EVENT_GROUPS = {name: cfg['codes'] for name, cfg in TARGETS.items()}
-EVENT_GROUPS['ALL'] = None   # все КЗС
+EVENT_GROUPS['ALL'] = None   # all clinically significant events
 
-# Ветвь программы (experience / control). Даже после выбора программы с указанной ветвью она «undefined»
-# у 8 949 из 10 937 пациентов (82%), поэтому признаки grp_* в модели не входят, а анализ подгрупп по ветви пропущен.
-# CLUSTERBP_USE_ARM=1 — вернуть их (например, для сравнения с первой версией v2).
+# Programme arm (experience / control). Even after choosing a programme with a defined arm, it is "undefined"
+# for 8,949 of 10,937 patients (82%), so grp_* features are not used in the models and the subgroup analysis by arm is skipped.
+# CLUSTERBP_USE_ARM=1 brings them back (e.g. for comparison with the first v2 version).
 USE_ARM_FEATURES = os.environ.get('CLUSTERBP_USE_ARM', '1') == '1'
 
 BP_COLS = ['sbp_mean', 'sbp_std', 'sbp_min', 'sbp_max', 'sbp_last', 'sbp_slope', 'sbp_arv',
@@ -108,27 +108,27 @@ LH_EV_COLS = [f'lh{L}_ev_{g}' for g in LH_EV_GROUPS for L in LONG_SPANS] \
 LH_COLS = LH_BP_COLS + LH_EV_COLS
 FEATURE_SETS = {
     'paper6': ['sbp_mean', 'sbp_std', 'tir140', 'age', 'bmi', 'cluster'],
-    'bp': BP_COLS + STATIC_COLS + PHENO_COLS + LH_BP_COLS,          # всё про давление, без истории событий
+    'bp': BP_COLS + STATIC_COLS + PHENO_COLS + LH_BP_COLS,          # all BP features, no event history
     'full': BP_COLS + STATIC_COLS + PHENO_COLS + EV_COLS + LH_COLS,
 }
 LR_COLS = BP_COLS + STATIC_COLS + ['c0', 'c1', 'c2', 'pd0', 'pd1', 'pd2'] + EV_COLS + LH_COLS
 
 
 def rule_score(win, t):
-    """Скор простого правила для цели t (в таблицах — модель rule_maxSBP).
+    """Score of the simple rule for target t (the rule_maxSBP model in the tables).
 
-    Для выгрузки оператора и для гипертензии в VitalDB — максимальный САД окна (выше давление — выше риск).
-    Для гипотензии в VitalDB (цель A и OLD) направление обратное: скор — минус минимальный САД окна.
+    For the operator's data and for hypertension in VitalDB: maximum SBP in the window (higher BP, higher risk).
+    For hypotension in VitalDB (targets A and OLD) the direction is reversed: the score is minus the minimum SBP.
     """
     if PRESET == 'vitaldb' and t in ('A', 'OLD'):
         return -win['sbp_min'].values.astype(float)
     return win['sbp_max'].values.astype(float)
 
 
-# ---------------------------------------------------------------- кэш
+# ---------------------------------------------------------------- cache
 
 def config_hash():
-    """Хэш всего, от чего зависят окна, цели и признаки. Пишется рядом с кэшем и проверяется при загрузке."""
+    """Hash of everything windows, targets and features depend on. Stored next to the cache and checked on load."""
     cfg = {'preset': PRESET, 'targets': {k: [sorted(v['codes']), v['gap'], v['horizon']] for k, v in TARGETS.items()},
            'window': [HISTORY_DAYS, STRIDE_DAYS, MIN_HIST_MEAS, MAX_POINTS, FOLLOWUP_DAYS, PHENO_DAYS, list(LONG_SPANS)],
            'full': FEATURE_SETS['full'], 'debug': DEBUG}
@@ -140,7 +140,7 @@ def _meta_path(name, where):
 
 
 def cache_is_current(name, where=None):
-    """True, если кэш name построен при текущих целях и признаках."""
+    """True if cache `name` was built with the current targets and features."""
     p = _meta_path(name, where or CACHE_DIR)
     return os.path.exists(p) and json.load(open(p)).get('hash') == config_hash()
 
@@ -149,14 +149,14 @@ def mark_cache(name, where=None):
     json.dump({'hash': config_hash()}, open(_meta_path(name, where or CACHE_DIR), 'w'))
 
 
-# ---------------------------------------------------------------- данные
+# ---------------------------------------------------------------- data
 
 def load_cached():
-    """Окна, последовательности и ряды для фенотипов, построенные в clusterbp_v2.ipynb, и его предсказания."""
+    """Windows, sequences and phenotype series built by clusterbp_v2.ipynb, and its predictions."""
     check_windows()
     if not cache_is_current('cv'):
-        raise RuntimeError('Предсказания кросс-валидации построены при других целях или признаках: '
-                           'перезапустите clusterbp_v2.ipynb.')
+        raise RuntimeError('Cross-validation predictions were built with other targets or features: '
+                           'rerun clusterbp_v2.ipynb.')
     win = pd.read_parquet(os.path.join(DATA_DIR, 'windows.parquet'))
     X_seq = np.load(os.path.join(DATA_DIR, 'X_seq.npy'))
     seq_len = np.load(os.path.join(DATA_DIR, 'seq_len.npy'))
@@ -168,14 +168,14 @@ def load_cached():
 
 
 def check_windows():
-    """Окна в DATA_DIR должны быть построены при текущих целях и признаках (их строит clusterbp_v2.ipynb)."""
+    """Windows in DATA_DIR must be built with the current targets and features (clusterbp_v2.ipynb builds them)."""
     if not cache_is_current('windows', DATA_DIR):
-        raise RuntimeError(f'Окна в {DATA_DIR}/ построены при других целях или признаках (или до их проверки): '
-                           'перезапустите clusterbp_v2.ipynb — он перестроит их сам.')
+        raise RuntimeError(f'Windows in {DATA_DIR}/ were built with other targets or features (or before this check): '
+                           'rerun clusterbp_v2.ipynb, it will rebuild them.')
 
 
 def event_counts(win, events, codes, lo_off, hi_off=0.0):
-    """Число событий из codes (None — все) в [cut − lo_off, cut − hi_off) для каждого окна."""
+    """Number of events with codes in `codes` (None — all) in [cut − lo_off, cut − hi_off) for each window."""
     e = events if codes is None else events[events.code.isin(codes)]
     e = e.sort_values(['pid', 'td'])
     by_pid = {p: g.values for p, g in e.groupby('pid')['td']}
@@ -191,12 +191,12 @@ def event_counts(win, events, codes, lo_off, hi_off=0.0):
 
 
 def long_history_features(win, meas, events, spans=LONG_SPANS):
-    """Признаки за последние 30/60/90 дней до отсечки (столбцы LH_COLS) — по среднесуточным значениям.
+    """Features over the last 30/60/90 days before the cutoff (LH_COLS columns), from daily mean values.
 
-    По Rothwell прогностична долговременная (межсуточная) вариабельность САД, поэтому кроме среднего считаются SD,
-    ARV и наклон среднесуточного САД, доля дней со средним САД ≥ 140, отклонение последних 14 дней от долговременного
-    уровня и максимум. Счётчики событий A, B и всех КЗС — за те же периоды и за всё время в программе.
-    Используются только дни строго до отсечки (отсечка — полночь), поэтому признаки причинные.
+    Following Rothwell, long-term (day-to-day) SBP variability is prognostic, so besides the mean we compute SD,
+    ARV and slope of daily mean SBP, the share of days with mean SBP ≥ 140, the deviation of the last 14 days from the
+    long-term level, and the maximum. Counts of A, B and all events over the same periods and over the whole programme.
+    Only days strictly before the cutoff (the cutoff is midnight) are used, so the features are causal.
     """
     m = meas[['pid', 'td', 'sbp', 'dbp']].copy()
     m['day'] = np.floor(m['td'])
@@ -251,12 +251,12 @@ def long_history_features(win, meas, events, spans=LONG_SPANS):
         total = event_counts(win, events, codes, 1e9)
         f[f'lh_ev_{g}_total'] = total
         f[f'lh_ev_{g}_per_week'] = total / np.maximum(win['days_in_program'].values, 1) * 7
-    assert set(f.columns) == set(LH_COLS), 'столбцы long_history_features расходятся с LH_COLS'
+    assert set(f.columns) == set(LH_COLS), 'long_history_features columns do not match LH_COLS'
     return f[LH_COLS]
 
 
 def fold_masks(win, k):
-    """Тест — фолд k; внутренняя валидация — 20% пациентов обучающей части (те же, что в clusterbp_v2.ipynb)."""
+    """Test — fold k; inner validation — 20% of the training patients (the same as in clusterbp_v2.ipynb)."""
     patients = win['pid'].values
     te = win['fold'].values == k
     train_pids = np.unique(patients[~te])
@@ -267,15 +267,15 @@ def fold_masks(win, k):
 
 
 def load_regions():
-    """Регион (субъект РФ) каждого пациента из справочника «МО и Пациенты»."""
+    """Region (federal subject of Russia) of each patient, from the "MO and patients" reference file, in English."""
     grp = pd.read_csv(os.path.join(RAW_DIR, 'МО и Пациенты 10.04.2025.csv'), sep=';')
     pid = pd.to_numeric(grp['id пациента'].astype(str).str.replace(r'\s', '', regex=True), errors='coerce')
     ok = pid.notna().values
-    s = pd.Series(grp['название субъекта'].values[ok], index=pid[ok].astype('int64').values)
+    s = pd.Series(grp['название субъекта'].values[ok], index=pid[ok].astype('int64').values).map(lambda r: REGION_EN.get(r, r))
     return s[~s.index.duplicated()]
 
 
-# ---------------------------------------------------------------- фенотипы GDTW
+# ---------------------------------------------------------------- GDTW phenotypes
 
 @njit(cache=True)
 def gdtw(s1, t1, s2, t2, window, gamma):
@@ -331,9 +331,9 @@ def assign_gdtw(W, T, window, gamma):
 
 
 def fit_phenotypes(pheno_first, pheno_first_pid, train_pids, seed):
-    """Шаблоны фенотипов по первым 30 дням обучающих пациентов: GDTW + Ward, k = 3, медианный z-профиль.
+    """Phenotype templates from the first 30 days of training patients: GDTW + Ward, k = 3, median z-profile.
 
-    Кластеры упорядочены по средней вариабельности САД участников: кластер 0 — самый вариабельный.
+    Clusters are ordered by the mean SBP variability of their members: cluster 0 is the most variable.
     """
     P = pheno_first[np.isin(pheno_first_pid, train_pids)]
     valid = ~np.isnan(P)
@@ -358,18 +358,18 @@ def fit_phenotypes(pheno_first, pheno_first_pid, train_pids, seed):
 
 
 def assign_phenotypes(pheno_win, templates):
-    """Ближайший шаблон (1-NN по GDTW) по прошлым 30 дням окна."""
+    """Nearest template (1-NN by GDTW) from the past 30 days of the window."""
     dist = assign_gdtw(pheno_win, templates, GDTW_WINDOW, GDTW_GAMMA)
     cl = np.where(np.isnan(dist).all(1), -1, np.nanargmin(np.where(np.isnan(dist), np.inf, dist), axis=1))
     return cl, dist
 
 
 def full_history_profiles(meas):
-    """Ряд среднесуточного САД за ВСЁ наблюдение пациента, сжатый до PHENO_DAYS точек (нормированное время).
+    """Daily mean SBP over the patient's WHOLE follow-up, compressed to PHENO_DAYS points (normalised time).
 
-    Так фенотип строился в первой версии статьи: по всему ряду, включая будущее относительно прогноза.
-    Нужен только аудиту утечек (переключатель «фенотип по всей истории»); в моделях не используется.
-    Возвращает (матрица [пациенты × PHENO_DAYS], массив pid).
+    This is how the phenotype was built in the first paper version: from the whole series, including the future
+    relative to the prediction. Used only by the leakage audit ("phenotype from full history"), not by the models.
+    Returns (matrix [patients × PHENO_DAYS], array of pid).
     """
     m = meas[['pid', 'td', 'sbp']].copy()
     m['day'] = np.floor(m['td'])
@@ -395,17 +395,17 @@ def set_phenotype_columns(win, cl, dist):
 
 
 def add_phenotype_columns(win, pheno_win, k):
-    """Кластеры окон по шаблонам фолда k, сохранённым в clusterbp_v2.ipynb."""
+    """Window clusters from the fold-k templates saved by clusterbp_v2.ipynb."""
     templates = np.load(os.path.join(MODELS_DIR, f'templates_fold{k}.npy'))
     cl, dist = assign_phenotypes(pheno_win, templates)
     set_phenotype_columns(win, cl, dist)
     return cl, dist
 
 
-# ---------------------------------------------------------------- модели
+# ---------------------------------------------------------------- models
 
 def best_threshold(y, s):
-    """Порог, максимизирующий Macro F1 (перебор всех различающихся значений скора)."""
+    """Threshold maximising Macro F1 (search over all distinct score values)."""
     o = np.argsort(-s, kind='stable')
     ys, ss = y[o], s[o]
     tp = np.cumsum(ys)
@@ -432,7 +432,7 @@ def fit_xgb(Xtr, ytr, Xva, yva, seed, **kw):
 
 
 class GRUAttn(nn.Module):
-    """GRU(64) с аддитивным вниманием по последним измерениям окна."""
+    """GRU(64) with additive attention over the last measurements of the window."""
 
     def __init__(self, n_in, hidden=64):
         super().__init__()
@@ -464,7 +464,7 @@ def gru_logits(model, X, L, mu, sd, bs=8192):
 
 
 class TCN(nn.Module):
-    """Свёрточная сеть с причинными расширенными свёртками (dilation 1, 2, 4, 8) по последним измерениям окна."""
+    """Convolutional network with causal dilated convolutions (dilation 1, 2, 4, 8) over the last measurements."""
 
     def __init__(self, n_in, channels=64, kernel=3, dilations=(1, 2, 4, 8), dropout=0.2):
         super().__init__()
@@ -487,7 +487,7 @@ class TCN(nn.Module):
 
 
 class SeqTransformer(nn.Module):
-    """Небольшой Transformer-энкодер (2 слоя, 4 головы) с маскированием паддинга и усреднением по измерениям."""
+    """Small Transformer encoder (2 layers, 4 heads) with padding mask and mean pooling over measurements."""
 
     def __init__(self, n_in, d_model=64, heads=4, layers=2, dropout=0.1):
         super().__init__()
@@ -505,8 +505,8 @@ class SeqTransformer(nn.Module):
 
 
 class TimeAwareGRU(nn.Module):
-    """GRU с затуханием скрытого состояния по времени между измерениями (идея GRU-D / DATA-GRU)
-    и аддитивным вниманием, как в GRUAttn. Канал 4 входа — log часов от предыдущего измерения."""
+    """GRU with hidden-state decay over the time between measurements (as in GRU-D / DATA-GRU)
+    and additive attention as in GRUAttn. Input channel 4 is log hours since the previous measurement."""
 
     def __init__(self, n_in, hidden=64, dt_channel=4):
         super().__init__()
@@ -536,16 +536,16 @@ SEQ_MODELS = {'GRU': GRUAttn, 'TimeAwareGRU': TimeAwareGRU, 'TCN': TCN, 'Transfo
 
 
 def train_gru(Xtr, Ltr, ytr, Xva, Lva, yva, seed, max_epochs=25, patience=3, bs=512):
-    """Обучение GRU (см. train_seq_model)."""
+    """Train the GRU (see train_seq_model)."""
     return train_seq_model(GRUAttn, Xtr, Ltr, ytr, Xva, Lva, yva, seed, max_epochs, patience, bs)
 
 
 def train_seq_model(model_cls, Xtr, Ltr, ytr, Xva, Lva, yva, seed, max_epochs=25, patience=3, bs=512):
-    """Обучение модели последовательностей: отрицательные окна прорежены до NEG_PER_POS:1,
-    ранняя остановка по AUPRC на валидации.
+    """Train a sequence model: negative windows are subsampled to NEG_PER_POS:1,
+    early stopping on validation AUPRC.
 
-    Возвращает модель, параметры стандартизации, поправку к logit на прореживание (log доли оставленных
-    отрицательных) и AUPRC на валидации по эпохам.
+    Returns the model, standardisation parameters, the logit correction for subsampling (log of the share of
+    kept negatives) and validation AUPRC by epoch.
     """
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
@@ -609,7 +609,7 @@ def logit(p, eps=1e-6):
 
 
 def tune_blend(y, pg, px, clusters=None, weights=np.round(np.arange(0, 1.0001, 0.05), 2), min_pos=30):
-    """Подбор (w, τ) смеси w·p_GRU + (1−w)·p_XGB по Macro F1: глобально и, если даны кластеры, для каждого кластера."""
+    """Tune (w, τ) of the blend w·p_GRU + (1−w)·p_XGB by Macro F1: globally and, if clusters are given, per cluster."""
     def search(mask):
         best = (-1, 0.5, 0.5)
         for w in weights:
@@ -642,10 +642,10 @@ def apply_blend(pg, px, params, clusters=None):
     return s, pred
 
 
-# ---------------------------------------------------------------- метрики
+# ---------------------------------------------------------------- metrics
 
 def boot_eval(y, pid, models, n_boot=1000, seed=SEED):
-    """Бутстреп по пациентам: массив [n_boot, n_models, 3] (AUROC, AUPRC, Macro F1)."""
+    """Patient-level bootstrap: array [n_boot, n_models, 3] (AUROC, AUPRC, Macro F1)."""
     _, pidx = np.unique(pid, return_inverse=True)
     n_pat = pidx.max() + 1
     prep = []
@@ -673,12 +673,23 @@ def boot_eval(y, pid, models, n_boot=1000, seed=SEED):
     return out
 
 
+REGION_EN = {
+    'Алтайский край': 'Altai Krai', 'Волгоградская область': 'Volgograd Oblast', 'Воронежская область': 'Voronezh Oblast',
+    'Кемеровская область': 'Kemerovo Oblast', 'Костромская область': 'Kostroma Oblast',
+    'Красноярский край': 'Krasnoyarsk Krai', 'Курская область': 'Kursk Oblast', 'Московская область': 'Moscow Oblast',
+    'Нижегородская область': 'Nizhny Novgorod Oblast', 'Новосибирская область': 'Novosibirsk Oblast',
+    'Ростовская область': 'Rostov Oblast', 'Санкт-Петербург': 'Saint Petersburg', 'Саратовская область': 'Saratov Oblast',
+    'Тверская область': 'Tver Oblast', 'Тульская область': 'Tula Oblast', 'Тюменская область': 'Tyumen Oblast',
+    'Ханты-Мансийский автономный округ — Югра': 'Khanty-Mansi Autonomous Okrug', 'Ярославская область': 'Yaroslavl Oblast',
+}   # region names in the operator's export -> English
+
+
 def ci(a):
     return f'[{np.percentile(a, 2.5):.3f}; {np.percentile(a, 97.5):.3f}]'
 
 
 def balanced_f1(y, score, fold, idx, n_folds=N_FOLDS):
-    """Macro F1 на сбалансированном тесте; порог подбирается на сбалансированных окнах остальных фолдов."""
+    """Macro F1 on a balanced test; the threshold is tuned on balanced windows of the other folds."""
     fs = []
     for k in range(n_folds):
         te, tr = idx[fold[idx] == k], idx[fold[idx] != k]

@@ -1,4 +1,4 @@
-target,comparison,metric,delta,95% ДИ,p (двусторонний)
+target,comparison,metric,delta,95% CI,p (two-sided)
 A,ClusterBP − Blend_global,AUROC,-0.0004968853841590404,[-0.001; -0.000],0.012
 A,ClusterBP − Blend_global,AUPRC,-0.0024950834369359964,[-0.004; -0.001],0.002
 A,ClusterBP − Blend_global,macro_F1,0.0003609113266895836,[-0.001; 0.002],0.704

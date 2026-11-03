@@ -1,11 +1,11 @@
-"""Общий код дополнительных анализов ClusterBP v2 (ноутбуки clusterbp_v2_leakage / first_events / features / shift_subgroups).
+"""Shared code for the additional ClusterBP v2 analyses (clusterbp_v2_leakage / first_events / features / shift_subgroups).
 
-Использует окна, построенные в clusterbp_v2.ipynb (cache_v2*/windows.parquet и ряды для фенотипов).
-Разбиение на фолды берётся из oof_predictions.parquet, если он есть, иначе строится тем же
-StratifiedGroupKFold, что и в clusterbp_v2.ipynb, поэтому фолды совпадают с основным ноутбуком.
-Предсказания и модели основного ноутбука используются, только если они построены при текущих целях и признаках
-(см. cache_is_current в clusterbp_lib.py). Шаблоны фенотипов фолда берутся из models/templates_fold{k}.npy, если они уже есть, иначе строятся заново
-(только по обучающим пациентам фолда) и сохраняются.
+Uses the windows built by clusterbp_v2.ipynb (cache_v2*/windows.parquet and phenotype series).
+Folds are taken from oof_predictions.parquet if present, otherwise built with the same StratifiedGroupKFold
+as in clusterbp_v2.ipynb, so the folds match the main notebook.
+Predictions and models of the main notebook are used only if they were built with the current targets and features
+(see cache_is_current in clusterbp_lib.py). Fold phenotype templates are taken from models/templates_fold{k}.npy if present,
+otherwise rebuilt (from the fold's training patients only) and saved.
 """
 import os
 import re
@@ -19,26 +19,26 @@ from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
 from clusterbp_lib import (RAW_DIR, DATA_DIR, CACHE_DIR, MODELS_DIR, SEED, N_FOLDS, N_CLUSTERS, TARGETS,
                            fit_phenotypes, assign_phenotypes, set_phenotype_columns, fit_xgb, best_threshold,
                            check_windows, config_hash, cache_is_current, full_history_profiles,
-                           event_counts, long_history_features, LONG_SPANS)   # реэкспорт для ноутбуков
+                           event_counts, long_history_features, LONG_SPANS)   # re-exported for the notebooks
 
 N_BOOT = int(os.environ.get('CLUSTERBP_N_BOOT', 1000))
 
 
-# ---------------------------------------------------------------- данные
+# ---------------------------------------------------------------- data
 
 def parse_int(s):
     return pd.to_numeric(s.astype(str).str.replace(r'\s', '', regex=True), errors='coerce')
 
 
 def to_days(s):
-    """Дни от 1970-01-01 (float); пустые и нераспознанные даты — NaN."""
+    """Days since 1970-01-01 (float); empty or unparsable dates are NaN."""
     t = pd.to_datetime(s, errors='coerce')
     out = t.values.astype('datetime64[s]').astype('int64') / 86400.0
     return np.where(t.isna().values, np.nan, out)
 
 
 def load_windows():
-    """Окна и ряды для фенотипов из clusterbp_v2.ipynb; столбец fold — как в основном ноутбуке."""
+    """Windows and phenotype series from clusterbp_v2.ipynb; the fold column matches the main notebook."""
     check_windows()
     win = pd.read_parquet(os.path.join(DATA_DIR, 'windows.parquet'))
     pheno_win = np.load(os.path.join(DATA_DIR, 'pheno_win.npy'))
@@ -59,7 +59,7 @@ def load_windows():
 
 
 def load_oof_scores(win):
-    """Предсказания clusterbp_v2.ipynb (если есть) — чтобы не переобучать XGB_full там, где он нужен как есть."""
+    """Predictions of clusterbp_v2.ipynb (if present), to avoid retraining XGB_full where it is needed as is."""
     path = os.path.join(CACHE_DIR, 'oof_predictions.parquet')
     if not os.path.exists(path) or not cache_is_current('cv'):
         return None
@@ -69,14 +69,14 @@ def load_oof_scores(win):
 
 
 def phenotypes(win, pheno_win, pheno_first, pheno_first_pid, k, mode='train', meas=None):
-    """Ставит в win столбцы фенотипа для фолда k и возвращает кластеры окон.
+    """Sets the phenotype columns in win for fold k and returns window clusters.
 
     mode:
-    - 'train' — корректно: шаблоны по первым 30 дням обучающих пациентов фолда, окно — по своим прошлым 30 дням;
-    - 'all' — ошибка: шаблоны по всем пациентам, включая тестовых (назначение окон — как в 'train');
-    - 'full_history' — ошибка первой версии статьи: шаблоны по всем пациентам и по ВСЕМУ ряду, кластер назначается
-      пациенту один раз по всему его ряду (включая будущее) и ставится во все его окна. Нужен meas.
-    Назначения кешируются (GDTW по всем окнам — самая долгая часть); кэш проверяется по числу окон.
+    - 'train' — correct: templates from the first 30 days of the fold's training patients, windows assigned by their past 30 days;
+    - 'all' — error: templates from all patients, including test patients (window assignment as in 'train');
+    - 'full_history' — error of the first paper version: templates from all patients and their WHOLE series; the cluster
+      is assigned once per patient from the whole series (including the future) and put into all its windows. Needs meas.
+    Assignments are cached (GDTW over all windows is the slowest part); the cache is checked by the number of windows.
     """
     key = {'train': f'fold{k}', 'all': 'all', 'full_history': 'full_history'}[mode]
     cache = os.path.join(CACHE_DIR, f'pheno_assign_{key}.npz')
@@ -88,7 +88,7 @@ def phenotypes(win, pheno_win, pheno_first, pheno_first_pid, k, mode='train', me
     pids = win['pid'].values
     if mode == 'full_history':
         if meas is None:
-            raise ValueError("для mode='full_history' нужен meas")
+            raise ValueError("mode='full_history' needs meas")
         P, P_pid = full_history_profiles(meas)
         tpath = os.path.join(MODELS_DIR, 'templates_full_history.npy')
         if os.path.exists(tpath):
@@ -118,7 +118,7 @@ def phenotypes(win, pheno_win, pheno_first, pheno_first_pid, k, mode='train', me
 
 
 def event_target(win, events, codes, gap, horizon):
-    """1, если у пациента окна есть событие из codes в [cut + gap, cut + gap + horizon)."""
+    """1 if the window's patient has an event with codes in [cut + gap, cut + gap + horizon)."""
     e = events[events.code.isin(codes)].sort_values(['pid', 'td'])
     by_pid = {p: g.values for p, g in e.groupby('pid')['td']}
     y = np.zeros(len(win), dtype=np.int8)
@@ -132,10 +132,10 @@ def event_target(win, events, codes, gap, horizon):
     return y
 
 
-# ---------------------------------------------------------------- модели
+# ---------------------------------------------------------------- models
 
 def fit_predict(win, cols, y, tr, va, seed, X=None):
-    """XGBoost с ранней остановкой на va; скор для всех окон и порог Macro F1, подобранный на va."""
+    """XGBoost with early stopping on va; scores for all windows and the Macro F1 threshold tuned on va."""
     X = win[cols].values.astype(float) if X is None else X
     m = fit_xgb(X[tr], y[tr], X[va], y[va], seed)
     s = m.predict_proba(X)[:, 1]
@@ -143,7 +143,7 @@ def fit_predict(win, cols, y, tr, va, seed, X=None):
     return s, thr, m
 
 
-# ---------------------------------------------------------------- метрики
+# ---------------------------------------------------------------- metrics
 
 def _prep(y, s):
     o = np.argsort(-s, kind='stable')
@@ -171,11 +171,11 @@ def _wmetrics(y, pred, o, g, w):
 
 
 def paired_boot(entries, pid, n_boot=N_BOOT, seed=SEED):
-    """Бутстреп по пациентам для нескольких оценок сразу.
+    """Patient-level bootstrap for several evaluations at once.
 
-    entries — список (mask, y, score, pred); каждая оценка считается на своей маске окон, но веса пациентов
-    в одной итерации общие, поэтому разности между оценками — парные (в том числе при разных масках).
-    Возвращает массив [n_boot, len(entries), 3]: AUROC, AUPRC, Macro F1.
+    entries — list of (mask, y, score, pred); each evaluation uses its own window mask, but patient weights are shared
+    within an iteration, so differences between evaluations are paired (including different masks).
+    Returns an array [n_boot, len(entries), 3]: AUROC, AUPRC, Macro F1.
     """
     _, pidx = np.unique(pid, return_inverse=True)
     n_pat = pidx.max() + 1
@@ -206,12 +206,12 @@ def pval(d):
 
 def point_metrics(y, s, p):
     y = y.astype(int)
-    out = {'окон': len(y), 'доля событий': y.mean() if len(y) else np.nan}
+    out = {'windows': len(y), 'event rate': y.mean() if len(y) else np.nan}
     if len(y) == 0 or y.min() == y.max():
-        return {**out, 'AUROC': np.nan, 'AUPRC': np.nan, 'AUPRC / доля': np.nan, 'macro_F1': np.nan,
+        return {**out, 'AUROC': np.nan, 'AUPRC': np.nan, 'AUPRC / event rate': np.nan, 'macro_F1': np.nan,
                 'sensitivity': np.nan, 'specificity': np.nan, 'PPV': np.nan}
     ap = average_precision_score(y, s)
-    out.update({'AUROC': roc_auc_score(y, s), 'AUPRC': ap, 'AUPRC / доля': ap / y.mean()})
+    out.update({'AUROC': roc_auc_score(y, s), 'AUPRC': ap, 'AUPRC / event rate': ap / y.mean()})
     if p is None:
         out.update({'macro_F1': np.nan, 'sensitivity': np.nan, 'specificity': np.nan, 'PPV': np.nan})
     else:
@@ -224,15 +224,15 @@ def point_metrics(y, s, p):
 
 
 def compare_table(entries, pid, ref=None, n_boot=N_BOOT):
-    """entries: dict имя -> (mask, y, score, pred). Метрики, 95% ДИ (бутстреп по пациентам) и разности с ref."""
+    """entries: dict name -> (mask, y, score, pred). Metrics, 95% CI (patient-level bootstrap) and differences from ref."""
     names = list(entries)
     B = paired_boot([entries[n] for n in names], pid, n_boot=n_boot)
     rows = []
     for j, n in enumerate(names):
         mask, y, s, p = entries[n]
-        r = {'вариант': n, **point_metrics(y[mask], s[mask], None if p is None else p[mask])}
-        r['AUPRC 95% ДИ'] = ci(B[:, j, 1])
-        r['macro_F1 95% ДИ'] = ci(B[:, j, 2])
+        r = {'variant': n, **point_metrics(y[mask], s[mask], None if p is None else p[mask])}
+        r['AUPRC 95% CI'] = ci(B[:, j, 1])
+        r['macro_F1 95% CI'] = ci(B[:, j, 2])
         if ref is not None and n != ref:
             jr = names.index(ref)
             rr = point_metrics(entries[ref][1][entries[ref][0]], entries[ref][2][entries[ref][0]],
@@ -240,14 +240,14 @@ def compare_table(entries, pid, ref=None, n_boot=N_BOOT):
             for mi, m in [(1, 'AUPRC'), (2, 'macro_F1'), (0, 'AUROC')]:
                 d = B[:, j, mi] - B[:, jr, mi]
                 r[f'Δ{m}'] = r[m] - rr[m]
-                r[f'Δ{m} 95% ДИ'] = ci(d)
+                r[f'Δ{m} 95% CI'] = ci(d)
                 r[f'p Δ{m}'] = pval(d)
         rows.append(r)
-    return pd.DataFrame(rows).set_index('вариант')
+    return pd.DataFrame(rows).set_index('variant')
 
 
 def calib(y, p):
-    """Калибровка в целом (средний прогноз / наблюдаемая доля) и ECE по децилям."""
+    """Calibration-in-the-large (mean prediction / observed rate) and ECE over deciles."""
     if len(y) < 20:
         return np.nan, np.nan
     q = pd.qcut(pd.Series(p).rank(method='first'), 10, labels=False).values
@@ -257,31 +257,31 @@ def calib(y, p):
     return p.mean() / max(y.mean(), 1e-12), float((np.abs(obs - pr) * wts).sum())
 
 
-# ---------------------------------------------------------------- терапия
+# ---------------------------------------------------------------- therapy
 
-# Классы препаратов по МНН (подстрока или регулярное выражение). Комбинированные препараты дают несколько классов.
+# Drug classes by INN (substring or regular expression on the Russian INN in the export). Combination drugs get several classes.
 DRUG_CLASSES = [
-    ('ИАПФ', r'прил'),                    # периндоприл, периндоприла аргинин, эналаприл…
-    ('БРА', r'артан'),                    # лозартан, валсартан, азилсартана медоксомил…
-    ('БКК', r'дипин|верапамил|дилтиазем'),
-    ('ББ', r'олол'),                      # бисопролол, метопролола сукцинат…
-    ('диуретик', r'индапамид|гидрохлоротиазид|хлорталидон|торасемид|фуросемид|спиронолактон|эплеренон|ксипамид'),
-    ('центральный', r'моксонидин|клонидин|метилдопа|рилменидин'),
-    ('альфа-блокатор', r'доксазозин|урапидил|празозин|теразозин'),
-    ('прочий гипотензивный', r'алискирен|сакубитрил'),
-    ('статин', r'(аторва|розува|симва|флува|питава|права|лова)статин'),   # не «нистатин»
-    ('антиагрегант/антикоагулянт', r'ацетилсалицил|клопидогрел|тикагрелор|варфарин|апиксабан|ривароксабан|дабигатран'),
+    ('ACE inhibitor', r'прил'),           # perindopril, perindopril arginine, enalapril…
+    ('ARB', r'артан'),                    # losartan, valsartan, azilsartan medoxomil…
+    ('CCB', r'дипин|верапамил|дилтиазем'),  # -dipines, verapamil, diltiazem
+    ('beta-blocker', r'олол'),            # bisoprolol, metoprolol succinate…
+    ('diuretic', r'индапамид|гидрохлоротиазид|хлорталидон|торасемид|фуросемид|спиронолактон|эплеренон|ксипамид'),
+    ('central', r'моксонидин|клонидин|метилдопа|рилменидин'),       # moxonidine, clonidine, methyldopa, rilmenidine
+    ('alpha-blocker', r'доксазозин|урапидил|празозин|теразозин'),    # doxazosin, urapidil, prazosin, terazosin
+    ('other antihypertensive', r'алискирен|сакубитрил'),             # aliskiren, sacubitril
+    ('statin', r'(аторва|розува|симва|флува|питава|права|лова)статин'),   # not nystatin
+    ('antiplatelet/anticoagulant', r'ацетилсалицил|клопидогрел|тикагрелор|варфарин|апиксабан|ривароксабан|дабигатран'),
 ]
-AH_CLASSES = ['ИАПФ', 'БРА', 'БКК', 'ББ', 'диуретик', 'центральный', 'альфа-блокатор', 'прочий гипотензивный']
+AH_CLASSES = ['ACE inhibitor', 'ARB', 'CCB', 'beta-blocker', 'diuretic', 'central', 'alpha-blocker', 'other antihypertensive']
 CLASS_COL = {c: f'th_cls_{i}' for i, c in enumerate(AH_CLASSES)}
 
 
 def load_therapy():
-    """Назначения с id пациента, датой, когда назначение стало известно, и классами препарата.
+    """Prescriptions with patient id, the date the prescription became known, and drug classes.
 
-    В выгрузке терапия привязана к id программы, поэтому пациент берётся из «МО и Пациенты».
-    Момент, когда назначение известно: дата назначения (если пусто — дата начала приёма), но не раньше начала
-    программы. Даты дневные: назначение учитывается для отсечки t, только если его день строго раньше t.
+    In the export, therapy is linked to the programme id, so the patient is taken from the "MO and patients" file.
+    The prescription is known from the prescription date (if empty, the start date), but not before the programme start.
+    Dates are daily: a prescription is used for cutoff t only if its day is strictly before t.
     """
     th = pd.read_csv(os.path.join(RAW_DIR, 'Медикаментозная терапия от 10.04.2025.csv'), low_memory=False)
     grp = pd.read_csv(os.path.join(RAW_DIR, 'МО и Пациенты 10.04.2025.csv'), sep=';')
@@ -307,8 +307,8 @@ def load_therapy():
 
 
 def therapy_features(win, th):
-    """Признаки терапии на момент отсечки (только назначения, известные строго до дня отсечки)."""
-    path = os.path.join(DATA_DIR, f'features_therapy_{config_hash()}.parquet')   # хэш целей и окон в имени
+    """Therapy features at the cutoff (only prescriptions known strictly before the cutoff day)."""
+    path = os.path.join(DATA_DIR, f'features_therapy_{config_hash()}.parquet')   # hash of targets and windows in the file name
     if os.path.exists(path):
         f = pd.read_parquet(path)
         if len(f) == len(win) and (f['pid'].values == win['pid'].values).all() and (f['cut'].values == win['cut'].values).all():
@@ -330,7 +330,7 @@ def therapy_features(win, th):
             continue
         tk = g['t_known'].values[None, :]
         te_ = g['t_end'].values[None, :]
-        known = tk < cut                                    # день назначения строго раньше дня отсечки
+        known = tk < cut                                    # prescription day strictly before the cutoff day
         active = known & ~(te_ < cut)
         ah = g['is_AH'].values[None, :]
         F['th_has_record'][idx] = known.any(1)
@@ -342,15 +342,15 @@ def therapy_features(win, th):
             F[CLASS_COL[c]][idx] = a
             cls_active.append(a)
         F['th_n_ah_classes'][idx] = np.sum(cls_active, axis=0)
-        # «изменение терапии» — новое гипотензивное назначение после начала программы
+        # "therapy change" — a new antihypertensive prescription after the programme start
         new = known & ah & (tk > g['t_prog_start'].values[None, :])
         for L in (14, 30, 60):
             F[f'th_new_ah_{L}'][idx] = (new & (tk >= cut - L)).sum(1)
         F['th_stop_ah_30'][idx] = (ah & known & (te_ < cut) & (te_ >= cut - 30)).sum(1)
         last = np.where(new, tk, -np.inf).max(1)
         F['th_days_since_ah_change'][idx] = np.where(np.isfinite(last), cut[:, 0] - last, np.nan)
-        F['th_statin'][idx] = (active & g['is_статин'].values[None, :]).any(1)
-        F['th_antiplatelet'][idx] = (active & g['is_антиагрегант/антикоагулянт'].values[None, :]).any(1)
+        F['th_statin'][idx] = (active & g['is_statin'].values[None, :]).any(1)
+        F['th_antiplatelet'][idx] = (active & g['is_antiplatelet/anticoagulant'].values[None, :]).any(1)
     f = pd.DataFrame(F).astype(float)
     pd.concat([win[['pid', 'cut']].reset_index(drop=True), f], axis=1).to_parquet(path)
     return f

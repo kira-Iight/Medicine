@@ -1,25 +1,25 @@
-"""Подготовка открытого набора VitalDB (https://vitaldb.net) для пайплайна ClusterBP v2.
+"""Preparation of the open VitalDB dataset (https://vitaldb.net) for the ClusterBP v2 pipeline.
 
-VitalDB — интраоперационный мониторинг ~6 400 пациентов, открытый, без регистрации. Здесь он нужен, чтобы проверить
-протокол и аудит утечек на данных, которые может скачать любой рецензент: клинические выводы статьи на нём не проверяются.
+VitalDB is open intraoperative monitoring of ~6,400 patients, available without registration. It is used here to test
+the protocol and the leakage audit on data any reviewer can download; the clinical conclusions of the paper are not tested on it.
 
-Скрипт пишет в cache_v2_vitaldb/ те же файлы, что основной ноутбук строит из выгрузки оператора:
-- measurements.parquet — pid, td, sbp, dbp, hr (td — время в МИНУТАХ от начала записи; медианы за минуту);
-- patients.parquet — pid, birth_days, bmi, group (birth_days подобран так, чтобы возраст в признаках был верным);
-- events.parquet — pid, td, code: 90001 — минута со средним АД < 65 мм рт. ст. (гипотензия),
-  90002 — минута с САД ≥ 160 мм рт. ст. (гипертензия).
-Дальше clusterbp_v2.ipynb и clusterbp_v2_leakage.ipynb работают без изменений при
-CLUSTERBP_PRESET=vitaldb CLUSTERBP_TAG=vitaldb: все длительности читаются в минутах (окно истории 14 мин, шаг 3 мин),
-цели — эпизод в горизонте 5 мин после зазора 5 мин (A — гипотензия, B — гипертензия; OLD — гипотензия без зазора).
+The script writes to cache_v2_vitaldb/ the same files the main notebook builds from the operator's export:
+- measurements.parquet — pid, td, sbp, dbp, hr (td is time in MINUTES from the start of the recording; per-minute medians);
+- patients.parquet — pid, birth_days, bmi, group (birth_days is set so that age in the features is correct);
+- events.parquet — pid, td, code: 90001 — minute with mean arterial pressure < 65 mm Hg (hypotension),
+  90002 — minute with SBP ≥ 160 mm Hg (hypertension).
+Then clusterbp_v2.ipynb and clusterbp_v2_leakage.ipynb run unchanged with
+CLUSTERBP_PRESET=vitaldb CLUSTERBP_TAG=vitaldb: all durations are read in minutes (14-min history window, 3-min stride),
+targets are an episode in a 5-min horizon after a 5-min gap (A — hypotension, B — hypertension; OLD — hypotension without gap).
 
-События, как и у оператора, задаются порогом по тому же сигналу, что и вход, поэтому зазор обязателен:
-без него цель частично вычисляется из последних минут окна истории.
+As in the operator's data, events are defined by a threshold on the same signal as the input, so the gap is required:
+without it the target is partly computed from the last minutes of the history window.
 
-Использование (нужен доступ в интернет и пакет vitaldb: pip install vitaldb):
-    python datasets/prepare_vitaldb.py --cases 600            # первые 600 подходящих операций
+Usage (requires internet access and the vitaldb package: pip install vitaldb):
+    python datasets/prepare_vitaldb.py --cases 600            # 600 eligible operations
     CLUSTERBP_PRESET=vitaldb CLUSTERBP_TAG=vitaldb jupyter nbconvert --execute --to notebook clusterbp_v2.ipynb
     CLUSTERBP_PRESET=vitaldb CLUSTERBP_TAG=vitaldb jupyter nbconvert --execute --to notebook clusterbp_v2_leakage.ipynb
-Остальные ноутбуки читают справочники оператора (регионы, терапия) и на VitalDB не запускаются.
+The other notebooks read the operator's reference files (regions, therapy) and are not run on VitalDB.
 """
 import argparse
 import os
@@ -28,7 +28,7 @@ import sys
 import numpy as np
 import pandas as pd
 
-# Числовые тренды монитора Solar 8000: инвазивное АД (артериальная линия) и ЧСС, шаг 2 с
+# Numeric trends of the Solar 8000 monitor: invasive arterial BP and heart rate, 2-s interval
 TRACKS = ['Solar8000/ART_SBP', 'Solar8000/ART_DBP', 'Solar8000/ART_MBP', 'Solar8000/HR']
 CASES_URL = 'https://api.vitaldb.net/cases'
 HYPO_CODE, HYPER_CODE = 90001, 90002
@@ -36,10 +36,10 @@ INTERVAL_S = 2
 
 
 def clean_minutes(raw, interval_s=INTERVAL_S):
-    """Массив [n × 4] (SBP, DBP, MBP, HR) с шагом interval_s → медианы за минуту с проверкой правдоподобия.
+    """Array [n × 4] (SBP, DBP, MBP, HR) sampled every interval_s → per-minute medians with plausibility checks.
 
-    Значения вне физиологических границ (артефакты промывки линии, отсоединение) удаляются до усреднения.
-    Возвращает DataFrame: minute, sbp, dbp, mbp, hr (только минуты, где есть САД, ДАД и ЧСС).
+    Values outside physiological bounds (line flushing artefacts, disconnection) are removed before averaging.
+    Returns a DataFrame: minute, sbp, dbp, mbp, hr (only minutes with SBP, DBP and HR present).
     """
     df = pd.DataFrame(raw, columns=['sbp', 'dbp', 'mbp', 'hr'], dtype=float)
     ok = df.sbp.between(40, 250) & df.dbp.between(20, 150) & df.mbp.between(30, 200) & (df.sbp > df.dbp)
@@ -51,14 +51,14 @@ def clean_minutes(raw, interval_s=INTERVAL_S):
 
 
 def convert(cases, clinical):
-    """cases: dict caseid -> DataFrame из clean_minutes; clinical: таблица api.vitaldb.net/cases.
+    """cases: dict caseid -> DataFrame from clean_minutes; clinical: the api.vitaldb.net/cases table.
 
-    Возвращает (measurements, patients, events) в формате пайплайна.
+    Returns (measurements, patients, events) in the pipeline's format.
     """
     clin = clinical.set_index('caseid')
     meas, pats, evs = [], [], []
     for cid, m in cases.items():
-        if len(m) < 60:                      # меньше часа записи — окна не построить
+        if len(m) < 60:                      # less than an hour of recording: no windows can be built
             continue
         td = m['minute'].values.astype(float)
         meas.append(pd.DataFrame({'pid': cid, 'td': td, 'sbp': m.sbp.values, 'dbp': m.dbp.values, 'hr': m.hr.values}))
@@ -68,7 +68,7 @@ def convert(cases, clinical):
             evs.append(pd.DataFrame({'pid': cid, 'td': td[mask], 'code': code}))
         age = pd.to_numeric(clin.at[cid, 'age'], errors='coerce') if cid in clin.index else np.nan
         bmi = pd.to_numeric(clin.at[cid, 'bmi'], errors='coerce') if cid in clin.index else np.nan
-        # age в признаках = (cut − birth_days) / 365.25; время в минутах, поэтому сдвиг за операцию пренебрежим
+        # age in the features = (cut − birth_days) / 365.25; time is in minutes, so the drift during an operation is negligible
         pats.append({'pid': cid, 'birth_days': td[0] - age * 365.25 if np.isfinite(age) else np.nan,
                      'bmi': bmi if 12 <= bmi <= 60 else np.nan, 'group': 'undefined'})
     meas = pd.concat(meas, ignore_index=True).sort_values(['pid', 'td']).reset_index(drop=True)
@@ -81,13 +81,13 @@ def convert(cases, clinical):
 
 
 def download(n_cases, seed=42):
-    import vitaldb   # pip install vitaldb (файл назван prepare_vitaldb.py, чтобы не перекрывать пакет)
+    import vitaldb   # pip install vitaldb (this file is named prepare_vitaldb.py so that it does not shadow the package)
     if not hasattr(vitaldb, 'find_cases'):
-        raise ImportError(f'Импортирован не пакет vitaldb, а {vitaldb.__file__}: установите пакет (pip install vitaldb) '
-                          'и проверьте, что рядом нет файла vitaldb.py')
+        raise ImportError(f'Imported {vitaldb.__file__} instead of the vitaldb package: install it (pip install vitaldb) '
+                          'and make sure there is no vitaldb.py file next to this script')
     clinical = pd.read_csv(CASES_URL)
     ids = sorted(set(vitaldb.find_cases(TRACKS)))
-    # только плановые операции под общей анестезией длительностью ≥ 1 ч
+    # only operations under general anaesthesia lasting ≥ 1 h
     c = clinical.set_index('caseid').reindex(ids)
     dur = (pd.to_numeric(c['opend'], errors='coerce') - pd.to_numeric(c['opstart'], errors='coerce')) / 60
     ok = (dur >= 60) & (c.get('ane_type', 'General') == 'General')
@@ -116,9 +116,9 @@ def main():
     meas.to_parquet(os.path.join(args.out, 'measurements.parquet'))
     pats.to_parquet(os.path.join(args.out, 'patients.parquet'))
     events.to_parquet(os.path.join(args.out, 'events.parquet'))
-    print(f'Операций: {meas.pid.nunique()}, минут: {len(meas):,}; '
-          f'гипотензия: {(events.code == HYPO_CODE).mean():.1%} событий, '
-          f'доля минут с гипотензией: {(events.code == HYPO_CODE).sum() / len(meas):.1%}')
+    print(f'Operations: {meas.pid.nunique()}, minutes: {len(meas):,}; '
+          f'hypotension: {(events.code == HYPO_CODE).mean():.1%} of events, '
+          f'share of minutes with hypotension: {(events.code == HYPO_CODE).sum() / len(meas):.1%}')
 
 
 if __name__ == '__main__':

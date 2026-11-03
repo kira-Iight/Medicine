@@ -1,4 +1,4 @@
-# Окружение, на котором посчитаны ноутбуки clusterbp_v2*.ipynb (Python 3.11, только CPU)
+# Environment used to run the clusterbp_v2*.ipynb notebooks (Python 3.11, CPU only)
 numpy==2.4.5
 pandas==2.3.3
 pyarrow==26.0.0
