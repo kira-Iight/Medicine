@@ -18,6 +18,9 @@
 
 ## Project Overview
 
+> **Note on versions.** Sections 1–8 below describe the first version of ClusterBP (v1). Its evaluation used a balanced test set, a random window split, no gap between history and horizon, and phenotypes computed from each patient's full history. The leakage audit in [ClusterBP v2](#clusterbp-v2) shows that these choices inflate the metrics, so the v1 numbers (e.g. Macro F1 0.858) are not comparable with v2. Current results are in the [ClusterBP v2](#clusterbp-v2) section.
+
+
 **ClusterBP** is a cluster-adaptive hybrid architecture for predicting hypertensive crises based on remote blood pressure (BP) monitoring data. The system is validated on the largest real-world remote monitoring cohort: **11,739 patients** and **4.9 million BP measurements** from 19 Russian regions as part of the national "Personal Medical Assistants" (PMP) program.
 
 The project addresses three key limitations of existing prediction systems:
@@ -396,7 +399,7 @@ Cross-validation at the real event rate (A — 3.8% of windows, B — 12.2%):
 
 Temporal validation (test from October 2024): ClusterBP v2 reaches AUPRC 0.46 for A and 0.70 for B; 0.33 and 0.63 on new patients. On regions not seen in training, AUPRC is 0.49 for A and 0.71 for B, the same as in patient-level CV. Predicted probabilities are well calibrated (ECE ≤ 0.002). With the earlier code sets (A with 33902, B with 33810) XGB_full reaches AUPRC 0.45 and 0.69; without the gap B would look much better (AUPRC 0.85), which is leakage, not skill.
 
-At the main operating threshold the model mostly anticipates repeated events: it detects 67% of all type A episodes but only 3% of a patient's first episode. This is a threshold effect, not a lack of signal: on windows without any prior event of the type, XGB_full reaches AUPRC 0.076 for A (event rate 0.9%; max-SBP rule 0.038) and 0.167 for B (event rate 2.1%; rule 0.050), and at 95% specificity it detects 41% and 47% of such events (rule 30% and 17%). With a threshold tuned on these windows, it flags 24% (A) and 33% (B) of first events about 5 and 12 days ahead (`results_v2/first_events/`).
+At the main operating threshold the model mostly anticipates repeated events: it detects 67% of all type A episodes but only 3% of a patient's first episode. This is a threshold effect, not a lack of signal: on windows without any prior event of the type, XGB_full reaches AUPRC 0.076 for A (event rate 0.9%; max-SBP rule 0.038) and 0.167 for B (event rate 2.1%; rule 0.050), and at 95% specificity it detects 41% and 47% of such events (rule 30% and 17%). With a threshold tuned on these windows, it flags 24% (A) and 33% (B) of first events about 5 and 12 days ahead, at 0.03 and 0.08 alerts per patient-week; the max-SBP rule flags 28% (A) and 15% (B) but at 0.08 and 0.09 alerts per patient-week (`results_v2/first_events/`).
 
 Leakage audit (`results_v2/leakage/`, XGB_full): a balanced 1:1 test inflates AUPRC by 0.44 (A) and 0.22 (B); a random window split by 0.10 and 0.07; omitting the gap by 0.06 and 0.14; fitting phenotypes on all patients or on the full history changes AUPRC by ≤ 0.01; tuning the threshold on test changes Macro F1 by ≤ 0.002. All errors together give AUPRC 0.96 (A) and 0.97 (B) instead of 0.49 and 0.71, and shrink the model's lead over the max-SBP rule from 0.18 to 0.06 (A) and from 0.36 to 0.18 (B).
 
