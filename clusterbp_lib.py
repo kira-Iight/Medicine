@@ -34,7 +34,7 @@ for _d in [DATA_DIR, CACHE_DIR, RESULTS_DIR, MODELS_DIR]:
 
 SEED = 42
 # Набор данных и шкала времени. 'pmp' — выгрузка оператора (время в днях). 'vitaldb' — открытый набор VitalDB,
-# подготовленный datasets/vitaldb.py: время в минутах, поэтому все длительности ниже читаются в минутах
+# подготовленный datasets/prepare_vitaldb.py: время в минутах, поэтому все длительности ниже читаются в минутах
 # (окно истории 14 мин, шаг 3 мин и т. д.), а цели — эпизоды гипо- и гипертензии.
 PRESET = os.environ.get('CLUSTERBP_PRESET', 'pmp')
 TIME_UNIT = {'pmp': 'день', 'vitaldb': 'минута'}[PRESET]
@@ -74,7 +74,7 @@ if PRESET == 'pmp':
                             title='B без зазора'),
     }
 elif PRESET == 'vitaldb':
-    # Коды событий задаёт datasets/vitaldb.py: 90001 — минута со средним АД < 65, 90002 — минута с САД ≥ 160.
+    # Коды событий задаёт datasets/prepare_vitaldb.py: 90001 — минута со средним АД < 65, 90002 — минута с САД ≥ 160.
     TARGETS = {
         'A':   dict(codes=[90001], gap=5, horizon=5, full=True, title='A: гипотензия (САД ср. < 65) через 5–10 мин'),
         'B':   dict(codes=[90002], gap=5, horizon=5, full=True, title='B: гипертензия (САД ≥ 160) через 5–10 мин'),
@@ -112,6 +112,17 @@ FEATURE_SETS = {
     'full': BP_COLS + STATIC_COLS + PHENO_COLS + EV_COLS + LH_COLS,
 }
 LR_COLS = BP_COLS + STATIC_COLS + ['c0', 'c1', 'c2', 'pd0', 'pd1', 'pd2'] + EV_COLS + LH_COLS
+
+
+def rule_score(win, t):
+    """Скор простого правила для цели t (в таблицах — модель rule_maxSBP).
+
+    Для выгрузки оператора и для гипертензии в VitalDB — максимальный САД окна (выше давление — выше риск).
+    Для гипотензии в VitalDB (цель A и OLD) направление обратное: скор — минус минимальный САД окна.
+    """
+    if PRESET == 'vitaldb' and t in ('A', 'OLD'):
+        return -win['sbp_min'].values.astype(float)
+    return win['sbp_max'].values.astype(float)
 
 
 # ---------------------------------------------------------------- кэш

@@ -435,3 +435,5 @@ jupyter nbconvert --to notebook --execute clusterbp_v2_leakage.ipynb
 ```
 
 The other notebooks use the operator's reference files (regions, therapy) and are not run on VitalDB.
+
+**Results on VitalDB** (583 operations, 40,631 windows; `results_vitaldb_nb/`). Hypotension (A, 13.4% of windows): XGB_full AUROC 0.861, AUPRC 0.566; GRU 0.847 / 0.532. Hypertension (B, 4.7%): AUPRC 0.18–0.23 for all models, little above the max-SBP rule (0.159). The leakage audit reproduces the pattern seen on the operator's data: a balanced test inflates AUPRC by 0.30 (A) and 0.59 (B), a random window split by 0.16 and 0.32, omitting the gap by 0.21 and 0.33 (larger than on home monitoring because minute-level pressure is strongly autocorrelated), while fitting phenotypes on all patients or on the full history changes AUPRC by ≤ 0.015 and tuning the threshold on test changes Macro F1 by ≤ 0.006. All errors together give AUPRC 0.95 (A) and 0.94 (B) instead of 0.57 and 0.20. The conclusions about evaluation protocol therefore do not depend on one operator or one type of monitoring.
