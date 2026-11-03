@@ -18,3 +18,4 @@ cache/
 raw_data/
 cache_v2_*/
 results_v2_vitaldb*/
+.DS_Store
