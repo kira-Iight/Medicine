@@ -424,11 +424,11 @@ Run order: `clusterbp_v2.ipynb` → `_temporal`, `_moe`, `_sequence_models`, `_r
 
 ### Public data: VitalDB
 
-`datasets/vitaldb.py` converts the open VitalDB intraoperative dataset (no registration) into the pipeline's format: `measurements.parquet` (per-minute median arterial SBP, DBP, HR), `patients.parquet` and `events.parquet` (90001 — minute with mean arterial pressure < 65 mm Hg, 90002 — minute with SBP ≥ 160 mm Hg). With `CLUSTERBP_PRESET=vitaldb` all durations are read in minutes (14-min history, 3-min stride, 5-min gap, 5-min horizon). Events are defined by a threshold on the input signal, as in the operator's data, so the gap and the leakage audit apply directly. The purpose is to test the method and protocol on data any reviewer can download, not the clinical conclusions.
+`datasets/prepare_vitaldb.py` converts the open VitalDB intraoperative dataset (no registration) into the pipeline's format: `measurements.parquet` (per-minute median arterial SBP, DBP, HR), `patients.parquet` and `events.parquet` (90001 — minute with mean arterial pressure < 65 mm Hg, 90002 — minute with SBP ≥ 160 mm Hg). With `CLUSTERBP_PRESET=vitaldb` all durations are read in minutes (14-min history, 3-min stride, 5-min gap, 5-min horizon). Events are defined by a threshold on the input signal, as in the operator's data, so the gap and the leakage audit apply directly. The purpose is to test the method and protocol on data any reviewer can download, not the clinical conclusions.
 
 ```bash
 pip install vitaldb
-python datasets/vitaldb.py --cases 600                       # writes cache_v2_vitaldb/
+python datasets/prepare_vitaldb.py --cases 600                       # writes cache_v2_vitaldb/
 export CLUSTERBP_PRESET=vitaldb CLUSTERBP_TAG=vitaldb
 jupyter nbconvert --to notebook --execute clusterbp_v2.ipynb
 jupyter nbconvert --to notebook --execute clusterbp_v2_leakage.ipynb

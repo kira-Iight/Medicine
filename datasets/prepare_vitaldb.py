@@ -16,7 +16,7 @@ CLUSTERBP_PRESET=vitaldb CLUSTERBP_TAG=vitaldb: все длительности 
 без него цель частично вычисляется из последних минут окна истории.
 
 Использование (нужен доступ в интернет и пакет vitaldb: pip install vitaldb):
-    python datasets/vitaldb.py --cases 600            # первые 600 подходящих операций
+    python datasets/prepare_vitaldb.py --cases 600            # первые 600 подходящих операций
     CLUSTERBP_PRESET=vitaldb CLUSTERBP_TAG=vitaldb jupyter nbconvert --execute --to notebook clusterbp_v2.ipynb
     CLUSTERBP_PRESET=vitaldb CLUSTERBP_TAG=vitaldb jupyter nbconvert --execute --to notebook clusterbp_v2_leakage.ipynb
 Остальные ноутбуки читают справочники оператора (регионы, терапия) и на VitalDB не запускаются.
@@ -81,7 +81,10 @@ def convert(cases, clinical):
 
 
 def download(n_cases, seed=42):
-    import vitaldb   # pip install vitaldb
+    import vitaldb   # pip install vitaldb (файл назван prepare_vitaldb.py, чтобы не перекрывать пакет)
+    if not hasattr(vitaldb, 'find_cases'):
+        raise ImportError(f'Импортирован не пакет vitaldb, а {vitaldb.__file__}: установите пакет (pip install vitaldb) '
+                          'и проверьте, что рядом нет файла vitaldb.py')
     clinical = pd.read_csv(CASES_URL)
     ids = sorted(set(vitaldb.find_cases(TRACKS)))
     # только плановые операции под общей анестезией длительностью ≥ 1 ч
