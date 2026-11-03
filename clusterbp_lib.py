@@ -86,10 +86,10 @@ FOLLOWUP_DAYS = max(cfg['gap'] + cfg['horizon'] for cfg in TARGETS.values())   #
 EVENT_GROUPS = {name: cfg['codes'] for name, cfg in TARGETS.items()}
 EVENT_GROUPS['ALL'] = None   # все КЗС
 
-# Ветвь программы (experience / control). Если после исправления выбора программы в clusterbp_v2.ipynb ветвь
-# у большинства пациентов всё равно «undefined», поставьте False: признаки grp_* уйдут из моделей,
-# а анализ подгрупп по ветви будет пропущен.
-USE_ARM_FEATURES = os.environ.get('CLUSTERBP_USE_ARM', '1') == '1'
+# Ветвь программы (experience / control). Даже после выбора программы с указанной ветвью она «undefined»
+# у 8 949 из 10 937 пациентов (82%), поэтому признаки grp_* в модели не входят, а анализ подгрупп по ветви пропущен.
+# CLUSTERBP_USE_ARM=1 — вернуть их (например, для сравнения с первой версией v2).
+USE_ARM_FEATURES = os.environ.get('CLUSTERBP_USE_ARM', '0') == '1'
 
 BP_COLS = ['sbp_mean', 'sbp_std', 'sbp_min', 'sbp_max', 'sbp_last', 'sbp_slope', 'sbp_arv',
            'dbp_mean', 'dbp_std', 'dbp_min', 'dbp_max', 'dbp_last', 'dbp_slope', 'dbp_arv',

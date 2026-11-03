@@ -295,38 +295,11 @@ Global SHAP values show:
 ## Project Structure
 
 ```
-├── data/
-│   ├── primary_clean.csv                    # Cleaned primary data
-│   ├── primary_imputed_corrected.csv       # Data with imputed missing values
-│   ├── ml_dataset_final.csv                # Aggregated dataset
-│   ├── ml_dataset_ready.csv                # FINAL dataset for ML
-│   ├── ts_prepared_data.pkl                # Time series for GDTW
-│   ├── ts_episodes.csv                     # Episodes for state classification
-│   ├── gt_dtw_distance_matrix.npy          # GDTW pairwise distance matrix
-│   ├── clustering_patients_updated.pkl     # Patient list for clustering
-│   ├── clustering_results.csv              # Cluster labels
-│   ├── clustering_results.pkl              # All clustering results
-│   └── photo/                              # All visualizations
-│       ├── ts_clustering_examples.png
-│       ├── gt_dtw_distance_matrix.png
-│       ├── dendrograms_comparison.png
-│       ├── optimal_k_analysis.png
-│       ├── cluster_centroids.png
-│       └── cluster_representative_patients_normalized_time.png
-│
 ├── Presentations/
 │   ├── EDA_presentation.pdf
 │   ├── EDA.pdf
 │   ├── GDTW_presentation.pdf
 │   └── GDTW.pdf
-│
-├── Downloads/                              # Source CSV files (not in repository)
-│   ├── Идентификаторы Субъектов 10.04.2025.csv
-│   ├── Идентификаторы МО 15.04.2025.csv
-│   ├── МО и Пациенты 10.04.2025.csv
-│   ├── Первичные данные от 10.04.2025.csv
-│   ├── Медикаментозная терапия от 10.04.2025.csv
-│   └── Клинически значимые события от 15.04.2025.csv
 │
 └── README.md
 ```
@@ -412,16 +385,22 @@ The generator simulates a blood pressure series for each patient (baseline, tren
 
 ### Main results
 
-Cross-validation at the real event rate (first v2 run, with the earlier target definitions and without long-history features; to be updated after the rerun) (A — 4.7% of windows, B — 13.1%):
+Cross-validation at the real event rate (A — 3.8% of windows, B — 12.2%):
 
 | Model | A: AUROC | A: AUPRC | B: AUROC | B: AUPRC |
 |:---|:---:|:---:|:---:|:---:|
-| ClusterBP v2 (GRU + XGB_full) | 0.896 | 0.449 | 0.910 | 0.677 |
-| XGB_full | 0.896 | 0.448 | 0.910 | 0.676 |
-| ClusterBP v1 (GRU + XGBoost on 6 features) | 0.876 | 0.406 | 0.895 | 0.643 |
-| Rule: maximum SBP in the window | 0.826 | 0.283 | 0.770 | 0.351 |
+| ClusterBP v2 (GRU + XGB_full) | 0.925 | 0.488 | 0.936 | 0.713 |
+| XGB_full | 0.926 | 0.487 | 0.935 | 0.712 |
+| ClusterBP v1 (GRU + XGBoost on 6 features) | 0.912 | 0.438 | 0.920 | 0.663 |
+| Rule: maximum SBP in the window | 0.892 | 0.312 | 0.787 | 0.352 |
 
-Temporal validation (test from October 2024): ClusterBP v2 reaches AUPRC 0.43 for A and 0.58 for B; 0.34 and 0.53 on new patients. On regions not seen in training, AUPRC is 0.45 for A and 0.68 for B, the same as in patient-level CV. Predicted probabilities are well calibrated (ECE ≤ 0.002). The model mostly anticipates repeated events: it detects 62% of all type A episodes but only 10% of a patient's first episode.
+Temporal validation (test from October 2024): ClusterBP v2 reaches AUPRC 0.46 for A and 0.70 for B; 0.33 and 0.63 on new patients. On regions not seen in training, AUPRC is 0.49 for A and 0.71 for B, the same as in patient-level CV. Predicted probabilities are well calibrated (ECE ≤ 0.002). With the earlier code sets (A with 33902, B with 33810) XGB_full reaches AUPRC 0.45 and 0.69; without the gap B would look much better (AUPRC 0.85), which is leakage, not skill.
+
+At the main operating threshold the model mostly anticipates repeated events: it detects 67% of all type A episodes but only 3% of a patient's first episode. This is a threshold effect, not a lack of signal: on windows without any prior event of the type, XGB_full reaches AUPRC 0.076 for A (event rate 0.9%; max-SBP rule 0.038) and 0.167 for B (event rate 2.1%; rule 0.050), and at 95% specificity it detects 41% and 47% of such events (rule 30% and 17%). With a threshold tuned on these windows, it flags 24% (A) and 33% (B) of first events about 5 and 12 days ahead (`results_v2/first_events/`).
+
+Leakage audit (`results_v2/leakage/`, XGB_full): a balanced 1:1 test inflates AUPRC by 0.44 (A) and 0.22 (B); a random window split by 0.10 and 0.07; omitting the gap by 0.06 and 0.14; fitting phenotypes on all patients or on the full history changes AUPRC by ≤ 0.01; tuning the threshold on test changes Macro F1 by ≤ 0.002. All errors together give AUPRC 0.96 (A) and 0.97 (B) instead of 0.49 and 0.71, and shrink the model's lead over the max-SBP rule from 0.18 to 0.06 (A) and from 0.36 to 0.18 (B).
+
+Long-history features (30–90 days) add 0.012 AUPRC for both A and B; therapy features add nothing (only 0.3% of patients had a new antihypertensive prescription during follow-up). Monthly recalibration or retraining does not improve the static model on the temporal test.
 
 All tables and figures are in `results_v2/`.
 

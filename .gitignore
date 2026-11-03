@@ -12,3 +12,9 @@ synthetic/rule_based/
 synthetic/run/
 cache_v2_synthetic*/
 results_v2_synthetic*/
+# Производные от закрытой выгрузки (удалены из истории): не добавлять обратно
+data/
+cache/
+raw_data/
+cache_v2_*/
+results_v2_vitaldb*/
