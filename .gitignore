@@ -18,3 +18,11 @@ cache/
 raw_data/
 cache_v2_*/
 .DS_Store
+# Данные пациентов и производные от них — не хранятся в git
+data/*.csv
+cache/
+kzs.csv
+patient_program.csv
+therapy.csv
+data/photo/cluster_representative_patients*.png
+data/photo/ts_clustering_examples.png
