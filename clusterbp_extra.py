@@ -354,3 +354,196 @@ def therapy_features(win, th):
     f = pd.DataFrame(F).astype(float)
     pd.concat([win[['pid', 'cut']].reset_index(drop=True), f], axis=1).to_parquet(path)
     return f
+
+
+# ---------------------------------------------------------------- keeping earlier results
+
+SNAPSHOT_SUFFIX = '_before_eda_baselines'
+
+
+def snapshot_results():
+    """Copy RESULTS_DIR to RESULTS_DIR + SNAPSHOT_SUFFIX once, before the EDA and baseline notebooks add to it.
+
+    The copy is made only if it does not exist yet, so rerunning the notebooks never overwrites it.
+    """
+    import shutil
+    from clusterbp_lib import RESULTS_DIR
+    dst = RESULTS_DIR + SNAPSHOT_SUFFIX
+    if os.path.isdir(RESULTS_DIR) and not os.path.exists(dst):
+        shutil.copytree(RESULTS_DIR, dst)
+        print(f'Copy of {RESULTS_DIR}/ saved to {dst}/')
+    elif os.path.exists(dst):
+        print(f'Copy {dst}/ already exists and is kept as is')
+    return dst
+
+
+def upsert_rows(path, new, keys=('target', 'model')):
+    """Add the rows of `new` to the CSV at `path`, replacing rows with the same keys; other rows are kept in order."""
+    keys = list(keys)
+    if os.path.exists(path):
+        old = pd.read_csv(path)
+        idx_new = pd.MultiIndex.from_frame(new[keys].astype(str))
+        keep = ~pd.MultiIndex.from_frame(old[keys].astype(str)).isin(idx_new)
+        out = pd.concat([old[keep], new], ignore_index=True)
+        order = {t: i for i, t in enumerate(pd.unique(pd.concat([old[keys[0]], new[keys[0]]]).astype(str)))}
+        out = out.sort_values(keys[0], key=lambda s: s.astype(str).map(order), kind='stable')
+    else:
+        out = new
+    out.to_csv(path, index=False)
+    return out
+
+
+# ---------------------------------------------------------------- daily series for MiniRocket
+
+def daily_series(win, meas, days=14):
+    """Daily means of SBP, DBP and HR over the `days` days before each cutoff: array [n_windows, 3, days] (float32).
+
+    Day j covers [cut − days + j, cut − days + j + 1). Days without measurements are filled forward, then backward
+    within the window (every window has measurements, so nothing stays empty).
+    """
+    m = meas[['pid', 'td', 'sbp', 'dbp', 'hr']].copy()
+    m['day'] = np.floor(m['td']).astype('int64')
+    d = m.groupby(['pid', 'day'])[['sbp', 'dbp', 'hr']].mean().reset_index()
+    by_pid = {p: (g['day'].values, g[['sbp', 'dbp', 'hr']].values.astype(np.float32)) for p, g in d.groupby('pid')}
+    out = np.full((len(win), 3, days), np.nan, dtype=np.float32)
+    cut = np.round(win['cut'].values).astype('int64')
+    offs = np.arange(-days, 0)
+    for p, idx in win.groupby('pid').indices.items():
+        if p not in by_pid:
+            continue
+        dd, vv = by_pid[p]
+        grid = cut[idx][:, None] + offs[None, :]
+        pos = np.clip(np.searchsorted(dd, grid), 0, len(dd) - 1)
+        hit = dd[pos] == grid
+        vals = np.where(hit[..., None], vv[pos], np.nan)            # [n, days, 3]
+        out[idx] = np.transpose(vals, (0, 2, 1))
+    s = pd.DataFrame(out.reshape(-1, days).T)                       # fill along time within each window and channel
+    s = s.ffill().bfill()
+    out = s.values.T.reshape(len(win), 3, days).astype(np.float32)
+    return out
+
+
+# ---------------------------------------------------------------- MiniRocket (Dempster, Schmidt & Webb, KDD 2021)
+
+class MiniRocket:
+    """MiniRocket transform for short multivariate series, following the reference implementation
+    (github.com/angus924/minirocket, minirocket_multivariate.py), written with numpy only.
+
+    84 fixed kernels of length 9 (weights −1, with +2 at three positions), dilations spaced exponentially up to
+    (L − 1) / 8, padding alternating between kernel/dilation combinations, a random subset of channels for each
+    combination, biases from quantiles (low-discrepancy sequence) of the convolution output of a random training
+    example, and PPV (proportion of positive values) features. For a 14-day series only dilation 1 is possible and
+    each kernel output has at most 15 distinct PPV values, so `num_features` defaults to 1,008 (12 biases per kernel)
+    instead of 10,000.
+    """
+
+    def __init__(self, num_features=1008, max_dilations_per_kernel=32, seed=SEED):
+        self.num_features = num_features
+        self.max_dilations = max_dilations_per_kernel
+        self.seed = seed
+
+    def _conv(self, X, kernel_idx, dilation, channels, padding):
+        """Convolution output [n, positions] of kernel `kernel_idx` summed over `channels`."""
+        Xc = X[:, channels, :].sum(1, dtype=np.float64)              # weights are shared by channels
+        n, L = Xc.shape
+        pad = 4 * dilation
+        Xp = np.zeros((n, L + 2 * pad))
+        Xp[:, pad:pad + L] = Xc
+        C = np.zeros((n, L))
+        for j in range(9):                                            # −1 at every position
+            C -= Xp[:, j * dilation:j * dilation + L]
+        for j in self.indices[kernel_idx]:                            # +3 at three positions → net weight +2
+            C += 3 * Xp[:, j * dilation:j * dilation + L]
+        if padding == 0:                                              # positions that need no padding
+            C = C[:, pad:L - pad] if L - 2 * pad > 0 else C[:, :0]
+        return C
+
+    def fit(self, X):
+        from itertools import combinations
+        rng = np.random.default_rng(self.seed)
+        n, n_ch, L = X.shape
+        self.indices = np.array(list(combinations(range(9), 3)))     # 84 kernels
+        n_k = len(self.indices)
+        per_kernel = self.num_features // n_k
+        true_max = min(per_kernel, self.max_dilations)
+        multiplier = per_kernel / true_max
+        max_exp = np.log2(max(L - 1, 1) / 8)
+        dil, counts = np.unique(np.floor(np.logspace(0, max(max_exp, 0), true_max, base=2)).astype(int),
+                                return_counts=True)
+        per_dil = (counts * multiplier).astype(int)
+        rem, i = per_kernel - per_dil.sum(), 0
+        while rem > 0:
+            per_dil[i] += 1
+            rem -= 1
+            i = (i + 1) % len(per_dil)
+        self.dilations, self.per_dilation = dil, per_dil
+        n_comb = n_k * len(dil)
+        max_ch = min(n_ch, 9)
+        n_chan = np.floor(2 ** rng.uniform(0, np.log2(max_ch + 1), n_comb)).astype(int)
+        self.channels = [rng.choice(n_ch, c, replace=False) for c in n_chan]
+        phi = (np.sqrt(5) + 1) / 2
+        quant = (np.arange(1, n_k * per_dil.sum() + 1) * phi) % 1
+        self.combos = []                                              # (kernel, dilation, channels, padding, biases)
+        q0, comb = 0, 0
+        for di, dl in enumerate(dil):
+            nf = per_dil[di]
+            for k in range(n_k):
+                padding = 1 if (di + k) % 2 == 0 else 0
+                ex = X[rng.integers(n)][None]
+                C = self._conv(ex, k, dl, self.channels[comb], 1)     # biases from the full (padded) output
+                biases = np.quantile(C.ravel(), quant[q0:q0 + nf])
+                self.combos.append((k, dl, self.channels[comb], padding, biases))
+                q0 += nf
+                comb += 1
+        return self
+
+    def transform(self, X, batch=50000):
+        """PPV features [n, num_features] as float32."""
+        n_out = sum(len(c[4]) for c in self.combos)
+        F = np.empty((len(X), n_out), dtype=np.float32)
+        for a in range(0, len(X), batch):
+            Xb = X[a:a + batch]
+            col = 0
+            for k, dl, ch, padding, biases in self.combos:
+                C = self._conv(Xb, k, dl, ch, padding)
+                F[a:a + batch, col:col + len(biases)] = (C[:, :, None] > biases[None, None, :]).mean(1)
+                col += len(biases)
+        return F
+
+
+def fit_ridge(F, y, tr, va, alphas=np.logspace(-1, 5, 13), chunk=50000):
+    """Ridge classifier on standardised features (the usual MiniRocket classifier), with alpha chosen by AUPRC
+    on the inner validation set and Platt scaling on the same set. Gram matrices are accumulated in chunks,
+    so memory stays at about the size of F.
+
+    Returns calibrated probabilities for all windows and the chosen alpha.
+    """
+    from sklearn.linear_model import LogisticRegression
+    idx = np.flatnonzero(tr)
+    n_f = F.shape[1]
+    s1, s2 = np.zeros(n_f), np.zeros(n_f)
+    for a in range(0, len(idx), chunk):
+        x = F[idx[a:a + chunk]].astype(np.float64)
+        s1 += x.sum(0)
+        s2 += (x * x).sum(0)
+    mu = s1 / len(idx)
+    sd = np.sqrt(np.maximum(s2 / len(idx) - mu ** 2, 0))
+    sd[sd < 1e-9] = 1.0
+    t = np.where(y[idx] == 1, 1.0, -1.0)
+    t -= t.mean()
+    G, b = np.zeros((n_f, n_f)), np.zeros(n_f)
+    for a in range(0, len(idx), chunk):
+        z = (F[idx[a:a + chunk]].astype(np.float64) - mu) / sd
+        G += z.T @ z
+        b += z.T @ t[a:a + chunk]
+    Zva = (F[va].astype(np.float64) - mu) / sd
+    best = (-1.0, None, None)
+    for al in alphas:
+        w = np.linalg.solve(G + al * np.eye(n_f), b)
+        ap = average_precision_score(y[va], Zva @ w)
+        if ap > best[0]:
+            best = (ap, w, al)
+    _, w, alpha = best
+    score = np.concatenate([((F[i:i + chunk].astype(np.float64) - mu) / sd) @ w for i in range(0, len(F), chunk)])
+    platt = LogisticRegression(max_iter=1000).fit(score[va].reshape(-1, 1), y[va])
+    return platt.predict_proba(score.reshape(-1, 1))[:, 1], alpha
