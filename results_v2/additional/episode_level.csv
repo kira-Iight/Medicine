@@ -1,21 +1,21 @@
 target,model,episodes,n,threshold,share detected,"lead time, days: median",Q1,Q3
-A,ClusterBP v2 (GRU + XGB_full stacking),all episodes,14506,"main (Macro F1 on inner validation, all windows)",0.6652419688404798,6.139508101852698,5.189736689813799,7.0731915509259125
-A,ClusterBP v2 (GRU + XGB_full stacking),patient's first episode,1157,"main (Macro F1 on inner validation, all windows)",0.03025064822817632,4.192349537035625,2.0753587962972233,5.83173032407467
-A,XGB_full,all episodes,14506,"main (Macro F1 on inner validation, all windows)",0.6537984282365917,6.142789351852116,5.195425347221317,7.078035300925876
-A,XGB_full,patient's first episode,1157,"main (Macro F1 on inner validation, all windows)",0.014693171996542784,4.2385763888887595,2.1863657407411665,5.582245370369492
-A,GRU,all episodes,14506,"main (Macro F1 on inner validation, all windows)",0.6451813042878809,6.075648148147593,5.107060185184309,7.000023148148102
-A,GRU,patient's first episode,1157,"main (Macro F1 on inner validation, all windows)",0.12618841832324978,4.212285879630144,2.419800347222008,6.159956597222845
-A,ClusterBP v1,all episodes,14506,"main (Macro F1 on inner validation, all windows)",0.6415965807252172,6.107638888890506,5.140376157407445,7.020775462962774
-A,ClusterBP v1,patient's first episode,1157,"main (Macro F1 on inner validation, all windows)",0.09853068280034573,4.465353009258251,2.365868055554529,6.20913194444347
-A,rule: max SBP,all episodes,14506,"main (Macro F1 on inner validation, all windows)",0.6325658348269682,6.1642187500001455,5.2210358796310175,7.097037037038717
-A,rule: max SBP,patient's first episode,1157,"main (Macro F1 on inner validation, all windows)",0.08643042350907519,6.021342592592191,3.642358217591209,7.050818865741348
-B,ClusterBP v2 (GRU + XGB_full stacking),all episodes,87698,"main (Macro F1 on inner validation, all windows)",0.8022531870738215,12.795237268519486,11.804050925926276,13.735491898149121
-B,ClusterBP v2 (GRU + XGB_full stacking),patient's first episode,1766,"main (Macro F1 on inner validation, all windows)",0.04813137032842582,11.004050925927004,9.778807870370656,12.801990740739711
-B,XGB_full,all episodes,87698,"main (Macro F1 on inner validation, all windows)",0.7937239161668453,12.795729166668025,11.804768518519268,13.73638888889036
-B,XGB_full,patient's first episode,1766,"main (Macro F1 on inner validation, all windows)",0.03114382785956965,11.00971064814803,9.825017361112259,12.807071759258179
-B,GRU,all episodes,87698,"main (Macro F1 on inner validation, all windows)",0.7931993888116035,12.747170138887668,11.797442129631236,13.706458333334922
-B,GRU,patient's first episode,1766,"main (Macro F1 on inner validation, all windows)",0.14552661381653453,11.729432870371966,8.935833333332994,12.804513888888323
-B,ClusterBP v1,all episodes,87698,"main (Macro F1 on inner validation, all windows)",0.7882733927797669,12.750677083333358,11.798414351851534,13.719285300925549
-B,ClusterBP v1,patient's first episode,1766,"main (Macro F1 on inner validation, all windows)",0.11721404303510759,11.02224537037182,9.744259259257888,12.799346064814017
-B,rule: max SBP,all episodes,87698,"main (Macro F1 on inner validation, all windows)",0.5174234304089033,12.775069444443943,11.801331018519704,13.727013888888905
-B,rule: max SBP,patient's first episode,1766,"main (Macro F1 on inner validation, all windows)",0.20668176670441676,11.952291666668316,11.00971064814803,12.979548611110658
+A,ClusterBP v2 (GRU + XGB_full stacking),all episodes,14621,"main (Macro F1 on inner validation, all windows)",0.6995417550099172,5.053234953702486,4.086325231482078,6.030188078703759
+A,ClusterBP v2 (GRU + XGB_full stacking),patient's first episode,1175,"main (Macro F1 on inner validation, all windows)",0.02553191489361702,2.324953703704523,1.1871093749996362,4.656765046295732
+A,XGB_full,all episodes,14621,"main (Macro F1 on inner validation, all windows)",0.696942753573627,5.062060185186056,4.09499710648106,6.040115740739566
+A,XGB_full,patient's first episode,1175,"main (Macro F1 on inner validation, all windows)",0.01276595744680851,2.4635416666678793,0.9405497685183946,4.697384259259707
+A,GRU,all episodes,14621,"main (Macro F1 on inner validation, all windows)",0.6795020860406265,5.0013425925935735,4.006556712962265,6.010057870369565
+A,GRU,patient's first episode,1175,"main (Macro F1 on inner validation, all windows)",0.13617021276595745,3.8314872685186856,1.339129050925294,5.183232060184309
+A,ClusterBP v1,all episodes,14621,"main (Macro F1 on inner validation, all windows)",0.672115450379591,5.062083333334158,4.096776620370292,6.055231481483133
+A,ClusterBP v1,patient's first episode,1175,"main (Macro F1 on inner validation, all windows)",0.10893617021276596,3.2311805555546016,1.2721064814813872,5.117826967592919
+A,rule: max SBP,all episodes,14621,"main (Macro F1 on inner validation, all windows)",0.6117912591478011,5.126990740740439,4.18170138889036,6.081793981480587
+A,rule: max SBP,patient's first episode,1175,"main (Macro F1 on inner validation, all windows)",0.06553191489361702,4.634525462963211,2.2131597222214623,5.768680555556784
+B,ClusterBP v2 (GRU + XGB_full stacking),all episodes,90020,"main (Macro F1 on inner validation, all windows)",0.9154965563208176,5.479837962964666,4.734120370369055,6.26130787036891
+B,ClusterBP v2 (GRU + XGB_full stacking),patient's first episode,1982,"main (Macro F1 on inner validation, all windows)",0.2542885973763875,1.7654629629632836,0.8153993055548199,3.800141782407991
+B,XGB_full,all episodes,90020,"main (Macro F1 on inner validation, all windows)",0.9055098866918463,5.444600694445398,4.727633101851097,6.053379629630399
+B,XGB_full,patient's first episode,1982,"main (Macro F1 on inner validation, all windows)",0.1917255297679112,1.7833912037021946,0.8150144675910269,3.816582754629053
+B,GRU,all episodes,90020,"main (Macro F1 on inner validation, all windows)",0.9061652966007554,5.33223379629635,4.642673611109785,6.001631944443943
+B,GRU,patient's first episode,1982,"main (Macro F1 on inner validation, all windows)",0.3784056508577195,1.8387210648143082,0.853726851850297,4.744716435184273
+B,ClusterBP v1,all episodes,90020,"main (Macro F1 on inner validation, all windows)",0.903721395245501,5.4519560185181035,4.729016203702486,6.091608796297805
+B,ClusterBP v1,patient's first episode,1982,"main (Macro F1 on inner validation, all windows)",0.34561049445005043,1.8440856481465744,0.8468981481491937,4.760972222222335
+B,rule: max SBP,all episodes,90020,"main (Macro F1 on inner validation, all windows)",0.5431015329926683,5.7384027777770825,4.793336226853171,6.5995399305566025
+B,rule: max SBP,patient's first episode,1982,"main (Macro F1 on inner validation, all windows)",0.28254288597376387,4.8018807870375895,1.8787239583334667,5.820775462962047

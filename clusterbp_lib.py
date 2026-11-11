@@ -56,29 +56,35 @@ if PRESET == 'pmp':
     # Target codes were chosen from the data (see results_v2/shift_subgroups/B_codes_*.csv):
     # 33902 is a heart-rate red zone, not a BP event; 33810 ("signs of reaching target BP") is the opposite of B
     # and appears only in some months, causing jumps in the B rate. Earlier code sets are kept as sensitivity checks.
+    # The horizon starts right after the history window (no gap). Variants with a gap between history and horizon
+    # (A: 1 day, B: 7 days) are kept as sensitivity checks for the appendix.
     TARGETS = {
-        'A':   dict(codes=[33012, 33901], gap=1, horizon=7, full=True,
+        'A':   dict(codes=[33012, 33901], gap=0, horizon=7, full=True,
                     title='A: acute BP rise (red zones)'),
-        'B':   dict(codes=[33601, 33801, 33802, 33911], gap=7, horizon=7, full=True,
-                    title='B: BP above target (one week ahead)'),
+        'B':   dict(codes=[33601, 33801, 33802, 33911], gap=0, horizon=7, full=True,
+                    title='B: BP above target'),
         'OLD': dict(codes=[33901, 33900, 33012, 33601, 33801], gap=0, horizon=7, full=True,
                     title='OLD: target of the first paper version'),
         # Sensitivity checks: baseline rules, LR and XGBoost only
-        'A_with33902': dict(codes=[33012, 33901, 33902], gap=1, horizon=7, full=False,
+        'A_with33902': dict(codes=[33012, 33901, 33902], gap=0, horizon=7, full=False,
                             title='A with 33902 (heart-rate red zone), first v2 code set'),
-        'B_with33810': dict(codes=[33601, 33801, 33802, 33810, 33911], gap=7, horizon=7, full=False,
+        'B_with33810': dict(codes=[33601, 33801, 33802, 33810, 33911], gap=0, horizon=7, full=False,
                             title='B with 33810 (signs of reaching target BP), first v2 code set'),
-        'B_no33601':   dict(codes=[33801, 33802, 33911], gap=7, horizon=7, full=False,
+        'B_no33601':   dict(codes=[33801, 33802, 33911], gap=0, horizon=7, full=False,
                             title='B without 33601 (code exists only from November 2024)'),
-        'B_gap0':      dict(codes=[33601, 33801, 33802, 33911], gap=0, horizon=7, full=False,
-                            title='B without gap'),
+        'A_gap1':      dict(codes=[33012, 33901], gap=1, horizon=7, full=False,
+                            title='A with a 1-day gap before the horizon'),
+        'B_gap7':      dict(codes=[33601, 33801, 33802, 33911], gap=7, horizon=7, full=False,
+                            title='B with a 7-day gap before the horizon'),
     }
 elif PRESET == 'vitaldb':
     # Event codes are set by datasets/prepare_vitaldb.py: 90001 — minute with MAP < 65, 90002 — minute with SBP ≥ 160.
+    # As for the operator's data, the horizon starts right after the history window; OLD is A with a 5-min gap
+    # (sensitivity check for the appendix).
     TARGETS = {
-        'A':   dict(codes=[90001], gap=5, horizon=5, full=True, title='A: hypotension (MAP < 65) in 5–10 min'),
-        'B':   dict(codes=[90002], gap=5, horizon=5, full=True, title='B: hypertension (SBP ≥ 160) in 5–10 min'),
-        'OLD': dict(codes=[90001], gap=0, horizon=5, full=True, title='A without gap'),
+        'A':   dict(codes=[90001], gap=0, horizon=5, full=True, title='A: hypotension (MAP < 65) in the next 5 min'),
+        'B':   dict(codes=[90002], gap=0, horizon=5, full=True, title='B: hypertension (SBP ≥ 160) in the next 5 min'),
+        'OLD': dict(codes=[90001], gap=5, horizon=5, full=True, title='A with a 5-min gap'),
     }
 else:
     raise ValueError(f'Unknown CLUSTERBP_PRESET={PRESET}')

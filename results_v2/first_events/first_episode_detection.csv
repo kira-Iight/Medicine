@@ -1,19 +1,19 @@
 target,model,threshold,first episodes,share detected,"lead time, days (median)",alerts per patient-week (naive windows)
-A,XGB_full (trained on all windows),Macro F1 on naive validation windows,1157,0.23509075194468454,5.210775462961465,0.027764368752632693
-A,"XGB_full, main threshold",main: Macro F1 on all validation windows,1157,0.014693171996542784,4.2385763888887595,0.0006169859722807265
-A,XGB trained on naive windows,Macro F1 on naive validation windows,1157,0.2212618841832325,5.424890046295332,0.032929832706610866
-A,"XGB on naive windows, no long history",Macro F1 on naive validation windows,1157,0.24546240276577355,5.2118981481471565,0.03191108842679851
-A,LR on naive windows (BP and static only),Macro F1 on naive validation windows,1157,0.24200518582541056,5.269189814815036,0.03600758831252287
-A,rule: max SBP,Macro F1 on naive validation windows,1157,0.2791702679343129,5.736539351852116,0.07994990319879554
-A,rule: mean SBP,Macro F1 on naive validation windows,1157,0.14520311149524634,5.577413194443579,0.028940946653261062
-A,rule: share SBP ≥ 160,Macro F1 on naive validation windows,1157,0.22731201382886776,5.616469907407009,0.045750227270165034
-A,rule: last SBP,Macro F1 on naive validation windows,1157,0.1996542783059637,4.882094907407009,0.03353964442339996
-B,XGB_full (trained on all windows),Macro F1 on naive validation windows,1766,0.32955832389580975,11.81621527777861,0.0765557131459977
-B,"XGB_full, main threshold",main: Macro F1 on all validation windows,1766,0.03114382785956965,11.00971064814803,0.005326064474189641
-B,XGB trained on naive windows,Macro F1 on naive validation windows,1766,0.3527746319365798,11.895486111112405,0.08808690127943741
-B,"XGB on naive windows, no long history",Macro F1 on naive validation windows,1766,0.33352208380520953,11.809016203704232,0.07928769120152863
-B,LR on naive windows (BP and static only),Macro F1 on naive validation windows,1766,0.27633069082672707,11.837094907406936,0.07460799377517753
-B,rule: max SBP,Macro F1 on naive validation windows,1766,0.15345413363533408,11.882083333333867,0.09398176875572496
-B,rule: mean SBP,Macro F1 on naive validation windows,1766,0.2072480181200453,11.895954861111022,0.06337844359739582
-B,rule: share SBP ≥ 160,Macro F1 on naive validation windows,1766,0.18742921857304642,11.920636574075615,0.06648962365432536
-B,rule: last SBP,Macro F1 on naive validation windows,1766,0.232163080407701,11.616631944445544,0.08769046282342975
+A,XGB_full (trained on all windows),Macro F1 on naive validation windows,1175,0.2578723404255319,4.203402777777228,0.028331134936471967
+A,"XGB_full, main threshold",main: Macro F1 on all validation windows,1175,0.015319148936170212,2.8071527777792653,0.0005308949063810904
+A,XGB trained on naive windows,Macro F1 on naive validation windows,1175,0.21872340425531914,4.2385763888887595,0.02945031879316724
+A,"XGB on naive windows, no long history",Macro F1 on naive validation windows,1175,0.25446808510638297,4.185995370371529,0.029988387955039966
+A,LR on naive windows (BP and static only),Macro F1 on naive validation windows,1175,0.22808510638297871,4.2120023148145265,0.026903458093636336
+A,rule: max SBP,Macro F1 on naive validation windows,1175,0.23659574468085107,4.381649305556493,0.06803346482718757
+A,rule: mean SBP,Macro F1 on naive validation windows,1175,0.18127659574468086,4.685763888890506,0.041524590785591224
+A,rule: share SBP ≥ 160,Macro F1 on naive validation windows,1175,0.23148936170212767,4.330005787036498,0.041079786945109775
+A,rule: last SBP,Macro F1 on naive validation windows,1175,0.17872340425531916,3.650214120370947,0.024234635050747605
+B,XGB_full (trained on all windows),Macro F1 on naive validation windows,1982,0.5630676084762866,2.906626157408027,0.05470850692905476
+B,"XGB_full, main threshold",main: Macro F1 on all validation windows,1982,0.19525731584258324,1.7609722222223354,0.008316589348855992
+B,XGB trained on naive windows,Macro F1 on naive validation windows,1982,0.5267406659939455,2.911371527778101,0.05205409291926444
+B,"XGB on naive windows, no long history",Macro F1 on naive validation windows,1982,0.5519677093844602,2.9246469907411665,0.05865565503452216
+B,LR on naive windows (BP and static only),Macro F1 on naive validation windows,1982,0.44803229061553984,2.959895833333576,0.055234218794630106
+B,rule: max SBP,Macro F1 on naive validation windows,1982,0.19677093844601412,4.743281250001019,0.07136754030868027
+B,rule: mean SBP,Macro F1 on naive validation windows,1982,0.29313824419778,4.791064814813581,0.05469988870175024
+B,rule: share SBP ≥ 160,Macro F1 on naive validation windows,1982,0.2674066599394551,3.846637731481678,0.05064070364132415
+B,rule: last SBP,Macro F1 on naive validation windows,1982,0.37235116044399597,2.8160763888881775,0.06814432329679206

@@ -10,10 +10,11 @@ The script writes to cache_v2_vitaldb/ the same files the main notebook builds f
   90002 — minute with SBP ≥ 160 mm Hg (hypertension).
 Then clusterbp_v2.ipynb and clusterbp_v2_leakage.ipynb run unchanged with
 CLUSTERBP_PRESET=vitaldb CLUSTERBP_TAG=vitaldb: all durations are read in minutes (14-min history window, 3-min stride),
-targets are an episode in a 5-min horizon after a 5-min gap (A — hypotension, B — hypertension; OLD — hypotension without gap).
+targets are an episode in the 5-min horizon right after the history window (A — hypotension, B — hypertension;
+OLD — hypotension after a 5-min gap, a sensitivity check).
 
-As in the operator's data, events are defined by a threshold on the same signal as the input, so the gap is required:
-without it the target is partly computed from the last minutes of the history window.
+As in the operator's data, events are defined by a threshold on the same signal as the input, so an event at the start
+of the horizon is strongly tied to the last minutes of the history window; the gap variant shows how much this matters.
 
 Usage (requires internet access and the vitaldb package: pip install vitaldb):
     python datasets/prepare_vitaldb.py --cases 600            # 600 eligible operations

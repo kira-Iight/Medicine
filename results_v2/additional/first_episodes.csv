@@ -1,11 +1,11 @@
 target,model,positive windows,of which without prior events,threshold,sensitivity: all,sensitivity: no prior events,sensitivity: repeated
-A,ClusterBP v2 (GRU + XGB_full stacking),15924,2803,"main (Macro F1 on inner validation, all windows)",0.5062798291886461,0.01641098822689975,0.6109290450422986
-A,XGB_full,15924,2803,"main (Macro F1 on inner validation, all windows)",0.4981788495352926,0.007491972886193364,0.6030028199070193
-A,GRU,15924,2803,"main (Macro F1 on inner validation, all windows)",0.4575483546847526,0.08062789867998572,0.5380687447603079
-A,ClusterBP v1,15924,2803,"main (Macro F1 on inner validation, all windows)",0.4652097462949008,0.06314662861220122,0.5511012880115845
-A,rule: max SBP,15924,2803,"main (Macro F1 on inner validation, all windows)",0.4979276563677468,0.07099536211202283,0.5891319259202805
-B,ClusterBP v2 (GRU + XGB_full stacking),51256,5628,"main (Macro F1 on inner validation, all windows)",0.664449040112377,0.0531272210376688,0.7398527220127992
-B,XGB_full,51256,5628,"main (Macro F1 on inner validation, all windows)",0.6576986108943343,0.03642501776830135,0.7343297974927676
-B,GRU,51256,5628,"main (Macro F1 on inner validation, all windows)",0.6300140471359451,0.14872068230277186,0.6893793284825107
-B,ClusterBP v1,51256,5628,"main (Macro F1 on inner validation, all windows)",0.6274777587014203,0.12544420753375976,0.6894012448496537
-B,rule: max SBP,51256,5628,"main (Macro F1 on inner validation, all windows)",0.4518885593881692,0.2027363184079602,0.48262032085561496
+A,ClusterBP v2 (GRU + XGB_full stacking),16075,2558,"main (Macro F1 on inner validation, all windows)",0.5221772939346812,0.014464425332290852,0.6182584893097581
+A,XGB_full,16075,2558,"main (Macro F1 on inner validation, all windows)",0.5236080870917574,0.006645817044566067,0.6214396685655101
+A,GRU,16075,2558,"main (Macro F1 on inner validation, all windows)",0.4833592534992224,0.08483189992181392,0.5587778353184878
+A,ClusterBP v1,16075,2558,"main (Macro F1 on inner validation, all windows)",0.4921928460342146,0.07232212666145427,0.5716505141673448
+A,rule: max SBP,16075,2558,"main (Macro F1 on inner validation, all windows)",0.4662519440124417,0.053166536356528536,0.5444255382111415
+B,ClusterBP v2 (GRU + XGB_full stacking),52485,4267,"main (Macro F1 on inner validation, all windows)",0.7294846146518053,0.1394422310756972,0.7816997801650836
+B,XGB_full,52485,4267,"main (Macro F1 on inner validation, all windows)",0.7137467847956559,0.10264823060698383,0.7678252934588743
+B,GRU,52485,4267,"main (Macro F1 on inner validation, all windows)",0.7078974945222445,0.22310756972111553,0.7507984570077565
+B,ClusterBP v1,52485,4267,"main (Macro F1 on inner validation, all windows)",0.7129465561589026,0.20623388797750175,0.7577875482185076
+B,rule: max SBP,52485,4267,"main (Macro F1 on inner validation, all windows)",0.46720015242450225,0.2217014295758144,0.4889252976067029
