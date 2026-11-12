@@ -512,6 +512,54 @@ class MiniRocket:
         return F
 
 
+def fit_ridge_stream(mr, D, ys, tr, va, alphas=np.logspace(-1, 7, 17), batch=10000):
+    """The classifier of `fit_ridge` for a fitted MiniRocket `mr` without keeping the feature matrix in memory
+    (10,000 features × 420,000 windows would take 17 GB).
+
+    One pass over the training windows accumulates feature sums, the Gram matrix X'X and X't; standardisation is
+    applied to them afterwards (Z'Z = S⁻¹(X'X − n·μμ')S⁻¹ and Z't = S⁻¹X't, since t is centred). The ridge
+    solutions for all alphas come from one eigendecomposition of Z'Z, shared by all targets. A second pass scores
+    every window for every alpha; alpha is chosen by AUPRC on the inner validation, then Platt scaling on the same set.
+
+    ys: {target: labels of all windows}. Returns {target: (calibrated probabilities for all windows, chosen alpha)}.
+    """
+    from sklearn.linear_model import LogisticRegression
+    idx = np.flatnonzero(tr)
+    n, targets = len(idx), list(ys)
+    T = np.column_stack([np.where(ys[t][idx] == 1, 1.0, -1.0) for t in targets])
+    T -= T.mean(0)
+    s1 = G = XT = None
+    for a in range(0, n, batch):
+        x = mr.transform(D[idx[a:a + batch]]).astype(np.float64)
+        if G is None:
+            s1, G, XT = np.zeros(x.shape[1]), np.zeros((x.shape[1],) * 2), np.zeros((x.shape[1], len(targets)))
+        s1 += x.sum(0)
+        G += x.T @ x
+        XT += x.T @ T[a:a + batch]
+    mu = s1 / n
+    sd = np.sqrt(np.maximum(np.diag(G) / n - mu ** 2, 0))
+    sd[sd < 1e-9] = 1.0
+    G -= n * np.outer(mu, mu)
+    G /= sd[:, None]
+    G /= sd[None, :]
+    lam, V = np.linalg.eigh(G)
+    del G
+    VB = V.T @ (XT / sd[:, None])
+    W = np.stack([V @ (VB / (lam[:, None] + al)) for al in alphas], 1) / sd[:, None, None]   # [features, alphas, targets]
+    off = np.tensordot(mu, W, axes=(0, 0))                                                   # z·w = x·(w/sd) − μ·(w/sd)
+    del V
+    S = np.empty((len(D), len(alphas), len(targets)))
+    for a in range(0, len(D), batch):
+        S[a:a + batch] = np.tensordot(mr.transform(D[a:a + batch]).astype(np.float64), W, axes=(1, 0)) - off
+    out = {}
+    for j, t in enumerate(targets):
+        aps = [average_precision_score(ys[t][va], S[va, i, j]) for i in range(len(alphas))]
+        i = int(np.argmax(aps))
+        platt = LogisticRegression(max_iter=1000).fit(S[va, i, j].reshape(-1, 1), ys[t][va])
+        out[t] = (platt.predict_proba(S[:, i, j].reshape(-1, 1))[:, 1], float(alphas[i]))
+    return out
+
+
 def fit_ridge(F, y, tr, va, alphas=np.logspace(-1, 5, 13), chunk=50000):
     """Ridge classifier on standardised features (the usual MiniRocket classifier), with alpha chosen by AUPRC
     on the inner validation set and Platt scaling on the same set. Gram matrices are accumulated in chunks,
