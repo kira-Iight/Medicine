@@ -389,6 +389,7 @@ def upsert_rows(path, new, keys=('target', 'model')):
         out = out.sort_values(keys[0], key=lambda s: s.astype(str).map(order), kind='stable')
     else:
         out = new
+    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
     out.to_csv(path, index=False)
     return out
 
