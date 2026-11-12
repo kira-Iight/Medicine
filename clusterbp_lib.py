@@ -687,6 +687,7 @@ REGION_EN = {
     'Ростовская область': 'Rostov Oblast', 'Санкт-Петербург': 'Saint Petersburg', 'Саратовская область': 'Saratov Oblast',
     'Тверская область': 'Tver Oblast', 'Тульская область': 'Tula Oblast', 'Тюменская область': 'Tyumen Oblast',
     'Ханты-Мансийский автономный округ — Югра': 'Khanty-Mansi Autonomous Okrug', 'Ярославская область': 'Yaroslavl Oblast',
+    'Забайкальский край': 'Zabaykalsky Krai',
 }   # region names in the operator's export -> English
 
 
