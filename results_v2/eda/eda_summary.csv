@@ -27,7 +27,7 @@ time of day,"share of readings, morning 06:00–11:59",,0.46423631149356637,0.46
 time of day,"share of readings, afternoon 12:00–17:59",,0.09701651569417573,0.0938942002396181,0.10030958768589307,4758262.0
 time of day,"share of readings, evening 18:00–23:59",,0.3891845383881762,0.38613289425152386,0.3922753754773192,4758262.0
 event rate,share of windows followed by a type-A event,,0.03824148636271723,0.035611647505671494,0.04086955585954349,420355.0
-event rate by month,share of windows followed by a type-A event,2023-11,0.08670520231213873,0.056172198047238636,0.12133350909961862,519.0
+event rate by month,share of windows followed by a type-A event (incomplete month),2023-11,0.08670520231213873,0.056172198047238636,0.12133350909961862,519.0
 event rate by month,share of windows followed by a type-A event,2023-12,0.04924634679553561,0.03941191709067928,0.058629466238392734,8691.0
 event rate by month,share of windows followed by a type-A event,2024-01,0.052154817458138894,0.04545585523873299,0.05838352323012298,21858.0
 event rate by month,share of windows followed by a type-A event,2024-02,0.050584410558092735,0.04457936565329012,0.05688275758881719,25838.0
@@ -41,7 +41,7 @@ event rate by month,share of windows followed by a type-A event,2024-09,0.039682
 event rate by month,share of windows followed by a type-A event,2024-10,0.031496708279837186,0.0278141347827684,0.03524679197913468,36607.0
 event rate by month,share of windows followed by a type-A event,2024-11,0.034464404524284765,0.030059842486593435,0.039126225600007364,30060.0
 event rate by month,share of windows followed by a type-A event,2024-12,0.03873020264195311,0.03328487124955398,0.04446021449310002,14459.0
-event rate by month,share of windows followed by a type-A event,2025-01,0.0,0.0,0.0,4.0
+event rate by month,share of windows followed by a type-A event (incomplete month),2025-01,0.0,0.0,0.0,4.0
 event rate by region,share of windows followed by a type-A event,Altai Krai,0.038017768547363565,0.027829498974757724,0.05043284676099047,17334.0
 event rate by region,share of windows followed by a type-A event,Kemerovo Oblast,0.03885416666666667,0.029258858255884694,0.050123607459638383,19200.0
 event rate by region,share of windows followed by a type-A event,Khanty-Mansi Autonomous Okrug,0.04553003963948004,0.03715158533238003,0.05498687276812596,45157.0
@@ -60,9 +60,9 @@ event rate by region,share of windows followed by a type-A event,Tyumen Oblast,0
 event rate by region,share of windows followed by a type-A event,Volgograd Oblast,0.03278160508186454,0.026971220130802716,0.0397436880648246,55885.0
 event rate by region,share of windows followed by a type-A event,Voronezh Oblast,0.03889111824505083,0.029046747214313787,0.04895738839173335,29904.0
 event rate by region,share of windows followed by a type-A event,Yaroslavl Oblast,0.024705882352941175,0.005830979431577631,0.05029186930091185,850.0
-event rate by region,share of windows followed by a type-A event,Забайкальский край,0.025157232704402517,0.0,0.062111801242236024,318.0
+event rate by region,share of windows followed by a type-A event,Zabaykalsky Krai,0.025157232704402517,0.0,0.062111801242236024,318.0
 event rate,share of windows followed by a type-B event,,0.12485875034197286,0.11900431145895256,0.13047733107557352,420355.0
-event rate by month,share of windows followed by a type-B event,2023-11,0.055876685934489405,0.03703523562472979,0.07707129094412331,519.0
+event rate by month,share of windows followed by a type-B event (incomplete month),2023-11,0.055876685934489405,0.03703523562472979,0.07707129094412331,519.0
 event rate by month,share of windows followed by a type-B event,2023-12,0.13324128408698654,0.11632328086314589,0.14949979720501375,8691.0
 event rate by month,share of windows followed by a type-B event,2024-01,0.13221703724036965,0.12012575200701041,0.14317347181726217,21858.0
 event rate by month,share of windows followed by a type-B event,2024-02,0.13607864385788374,0.12568848992949908,0.14612236333625894,25838.0
@@ -76,7 +76,7 @@ event rate by month,share of windows followed by a type-B event,2024-09,0.124158
 event rate by month,share of windows followed by a type-B event,2024-10,0.1204141284453793,0.11246167154968857,0.1284743800275117,36607.0
 event rate by month,share of windows followed by a type-B event,2024-11,0.11799733865602129,0.10881196533629643,0.1271593792631767,30060.0
 event rate by month,share of windows followed by a type-B event,2024-12,0.11404661456532264,0.10375521105367964,0.1249857328868321,14459.0
-event rate by month,share of windows followed by a type-B event,2025-01,0.0,0.0,0.0,4.0
+event rate by month,share of windows followed by a type-B event (incomplete month),2025-01,0.0,0.0,0.0,4.0
 event rate by region,share of windows followed by a type-B event,Altai Krai,0.11393792546440522,0.08796796709879447,0.14240034470592547,17334.0
 event rate by region,share of windows followed by a type-B event,Kemerovo Oblast,0.10296875,0.08042390632258987,0.12858189234650189,19200.0
 event rate by region,share of windows followed by a type-B event,Khanty-Mansi Autonomous Okrug,0.16690657040990323,0.1482924701051192,0.18706199906720153,45157.0
@@ -95,7 +95,7 @@ event rate by region,share of windows followed by a type-B event,Tyumen Oblast,0
 event rate by region,share of windows followed by a type-B event,Volgograd Oblast,0.10580656705734992,0.09158218870006642,0.12134313711323375,55885.0
 event rate by region,share of windows followed by a type-B event,Voronezh Oblast,0.15686864633493847,0.1317286737804413,0.18291113825255315,29904.0
 event rate by region,share of windows followed by a type-B event,Yaroslavl Oblast,0.07411764705882352,0.029471272187519326,0.13082465667603632,850.0
-event rate by region,share of windows followed by a type-B event,Забайкальский край,0.050314465408805034,0.009462239055407771,0.10543527870934455,318.0
+event rate by region,share of windows followed by a type-B event,Zabaykalsky Krai,0.050314465408805034,0.009462239055407771,0.10543527870934455,318.0
 recurrence,share of patients with ≥ 1 A episode,,0.2464676511207904,0.23754116647190057,0.25465048337405716,9413.0
 recurrence,share of A episodes in patients with an earlier A episode,,0.879361447662628,0.8702232212961325,0.8878147201501977,19231.0
 recurrence,A episodes per patient with ≥ 1 episode: median,,3.0,,,2320.0
